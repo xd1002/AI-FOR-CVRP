@@ -25,16 +25,20 @@ from utils import torch_load_cpu, load_problem
 
 
 def run(opts):
-
+    """
+    Training framework
+    args:
+        opts: parameter configuration
+    returns:
+    """
     pp.pprint(vars(opts))
-
     torch.manual_seed(opts.seed)
 
     tb_logger = None
     if not opts.test_only:
         if not opts.no_tensorboard:
             tb_logger = TbLogger(os.path.join(opts.log_dir, "{}_{}".format(opts.problem, opts.graph_size), opts.run_name))
-    
+
     os.makedirs(opts.save_dir)
     with open(os.path.join(opts.save_dir, "args.json"), 'w') as f:
         json.dump(vars(opts), f, indent=True)
@@ -65,7 +69,6 @@ def run(opts):
         tanh_clipping=opts.tanh_clipping,
         checkpoint_encoder=opts.checkpoint_encoder,
         shrink_size=opts.shrink_size,
-        n_EG=opts.n_EG,
         n_agent=opts.n_agent
     ).to(opts.device)
 

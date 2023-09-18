@@ -14,29 +14,33 @@ from utils import move_to
 
 
 def get_inner_model(model):
+    """
+    if train in parallel, update model in a different way
+    args:
+        model: torch model
+    returns:
+    """
     return model.module if isinstance(model, DataParallel) else model
 
+def predict_path(model, dataset, opts):
+    cost, pi, agent_all = rollout(model, dataset, opts)
+    np.savetxt('{}\\routine.csv'.format(opts.test_absolute_dir), pi, delimiter=',')
+    np.savetxt('{}\\agent_all.csv'.format(opts.test_absolute_dir), agent_all, delimiter=',')
+    avg_cost = cost.mean()
+    print('Validation overall avg_cost: {} +- {}'.format(
+        avg_cost, torch.std(cost) / math.sqrt(len(cost))))
+
+    return avg_cost
 
 def validate(model, dataset, opts):
     # Validate
     print('Validating...')
-    if not opts.test_only:
-        cost = rollout(model, dataset, opts)
-        avg_cost = cost.mean()
-        print('Validation overall avg_cost: {} +- {}'.format(
-            avg_cost, torch.std(cost) / math.sqrt(len(cost))))
+    cost = rollout(model, dataset, opts)
+    avg_cost = cost.mean()
+    print('Validation overall avg_cost: {} +- {}'.format(
+        avg_cost, torch.std(cost) / math.sqrt(len(cost))))
 
-        return avg_cost
-    else:
-        cost, pi, agent_all = rollout(model, dataset, opts)
-        np.savetxt('{}\\routine.csv'.format(opts.test_absolute_dir), pi, delimiter=',')
-        np.savetxt('{}\\agent_all.csv'.format(opts.test_absolute_dir), agent_all, delimiter=',')
-        avg_cost = cost.mean()
-        print('Validation overall avg_cost: {} +- {}'.format(
-            avg_cost, torch.std(cost) / math.sqrt(len(cost))))
-
-        return avg_cost
-
+    return avg_cost
 
 def rollout(model, dataset, opts):
     # Put in greedy evaluation mode!
@@ -183,7 +187,6 @@ def train_batch(
         opts
 ):
 
-    n_EG = opts.n_EG
     optimizer.zero_grad()
     # x: dict={'loc': tensor.shape = (batch_size, graph_size+n_agent, 3),
     #          'demand': tensor.shape = (batch_size, graph_size+n_agent),
@@ -191,18 +194,29 @@ def train_batch(
     x, bl_val = baseline.unwrap_batch(batch)
     x = move_to(x, opts.device)
     bl_val = move_to(bl_val, opts.device) if bl_val is not None else None
-    costs, log_likelihood, reinforce_loss = model(x, opts, baseline, bl_val, n_EG=n_EG)
-    
+    cost, _log_p, pi, mask = model(x, opts, baseline, bl_val)
+
+    ll = model._calc_log_likelihood(_log_p, pi, mask)
+    # print('_log_p:', _log_p, '  ', 'pi:', pi, '  ', 'mask:', mask)
+    if baseline != None and not opts.test_only:
+        # 如果是ExponentialBaseline的话就是costs[0]（即n_path=0，第一个decoder）的平均数
+        bl_val, _ = baseline.eval(input, cost) if bl_val is None else (bl_val, 0)
+        reinforce_loss = ((cost - bl_val) * ll).mean()
+        loss = reinforce_loss
+        loss.backward()
+    # batch_size x n_paths
+    costs = torch.stack([cost], 1)
+
     costs, _ = torch.min(costs, 1)
     # Clip gradient norms and get (clipped) gradient norms for logging
     grad_norms = clip_grad_norms(optimizer.param_groups, opts.max_grad_norm)
     if grad_norms[0][0] != grad_norms[0][0]:
         optimizer.zero_grad()
-        print ("nan detected")
+        print("nan detected")
         return
     optimizer.step()
     # Logging
-    if step % int(opts.log_step) == 0:
+    '''if step % int(opts.log_step) == 0:
         log_values(costs, grad_norms, epoch, batch_id, step,
-                   log_likelihood, log_likelihood.mean(), 0, tb_logger, opts)
+                   log_likelihood, log_likelihood.mean(), 0, tb_logger, opts)'''
 

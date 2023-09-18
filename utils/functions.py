@@ -11,6 +11,13 @@ import torch.nn.functional as F
 
 
 def load_problem(name):
+    """
+    get  problem class
+    args:
+        name(string): problem name (e.g "cvrp")
+    return:
+        (class): problem class
+    """
     from problems import TSP, CVRP, SDVRP, OP, PCTSPDet, PCTSPStoch
     problem = {
         'tsp': TSP,
@@ -25,7 +32,14 @@ def load_problem(name):
 
 
 def torch_load_cpu(load_path):
-    # 我啥要有这个loc
+    """
+    load model parameters into CPU, including baseline param (maybe),
+    model param, optimizor param (maybe)
+    args:
+        load_path(string): model save path(absolute path)
+    return:
+        (dict): model parameters
+    """
     return torch.load(load_path, map_location=lambda storage, loc: storage)  # Load on CPU
 
 
@@ -119,8 +133,7 @@ def load_model(path, epoch=None):
         tanh_clipping=args['tanh_clipping'],
         checkpoint_encoder=args.get('checkpoint_encoder', False),
         shrink_size=args.get('shrink_size', None),
-        n_paths=args['n_paths'],
-        n_EG=args['n_EG']
+        n_paths=args['n_paths']
     )
     # Overwrite model parameters by parameters to load
     load_data = torch_load_cpu(model_filename)
@@ -179,8 +192,7 @@ def load_model_search(path, epoch=None):
         tanh_clipping=args['tanh_clipping'],
         checkpoint_encoder=args.get('checkpoint_encoder', False),
         shrink_size=args.get('shrink_size', None),
-        n_paths=args['n_paths'],
-        n_EG=args['n_EG']
+        n_paths=args['n_paths']
     )
     # Overwrite model parameters by parameters to load
     # epoch-xx.pt文件都需要先torch.load转成dict然后再model.load_state_dict

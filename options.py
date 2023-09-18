@@ -74,7 +74,6 @@ def get_options(args=None):
     parser.add_argument('--no_tensorboard', action='store_true', help='Disable logging TensorBoard files')
     parser.add_argument('--no_progress_bar', action='store_true', help='Disable progress bar')
     parser.add_argument('--n_paths', type=int, default=1, help='number of paths (number of decoders)')
-    parser.add_argument('--n_EG', type=int, default=200, help='number of steps between EG')
     parser.add_argument('--test_size', type=int, default=1, help='number of graphs used to test the model')
     parser.add_argument('--test_batch_size', type=int, default=1, help='Number of instances per batch during test')
     parser.add_argument('--test_dir', default='tests', help='Directory to record test results in')

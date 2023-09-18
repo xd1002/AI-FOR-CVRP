@@ -55,7 +55,6 @@ class AttentionModel(nn.Module):
                  n_heads=8,
                  checkpoint_encoder=False,
                  shrink_size=None,
-                 n_EG=None,
                  n_agent=None):
         super(AttentionModel, self).__init__()
 
@@ -79,7 +78,6 @@ class AttentionModel(nn.Module):
         self.n_heads = n_heads
         self.checkpoint_encoder = checkpoint_encoder
         self.shrink_size = shrink_size
-        self.n_EG = n_EG
         self.n_agent = n_agent
 
         # Problem specific context parameters (placeholder and step context dimension)
@@ -129,7 +127,7 @@ class AttentionModel(nn.Module):
         if temp is not None:  # Do not change temperature if not provided
             self.temp = temp
 
-    def forward(self, input, opts=None, baseline=None, bl_val=None, n_EG=None, return_pi=False):
+    def forward(self, input, opts=None, baseline=None, bl_val=None, return_pi=False):
         """
         :param input: dict={'loc': tensor.shape = (batch_size, graph_size+n_agent, 3),
                             'demand': tensor.shape = (batch_size, graph_size+n_agent),
@@ -138,7 +136,6 @@ class AttentionModel(nn.Module):
         using DataParallel as the results may be of different lengths on different GPUs
         :return:
         """
-        n_EG = self.n_EG
         # self._init_embed(input): batch_size x graph_size+1 x embedding_dim
         # embeddings: batch_size x graph_size+1 x embed_dim
         # init_context: batch_size x embedding_dim
@@ -188,15 +185,7 @@ class AttentionModel(nn.Module):
             states = states._replace(prev_a=states.agent_prev_a.gather(1, current_agent[:, None]),
                                      used_capacity=states.agent_used_capacity.gather(1, current_agent[:, None]))
 
-            '''if j > 1 and j % n_EG == 0:
-                if not self.is_vrp:
-                    mask_attn = mask ^ mask_first
-                else:
-                    mask_attn = mask
-                # 根据当前的mask将attn中一些元素mask掉后重新算一遍embedding和embedding对应的fixed
-                embeddings, init_context = self.embedder.change(attn, V, h_old, mask_attn, self.is_tsp)
-                fixed = self._precompute(embeddings)'''
-            
+
             # log_p: batch_size x 1 x graph_size+n_depot+n_agent    (每个点被选择的概率)
             # mask: batch_size x 1 x graph_size+n_depot+n_agent
             log_p, mask = self._get_log_p(fixed, states, opts)
@@ -226,24 +215,15 @@ class AttentionModel(nn.Module):
         costs.append(cost.detach())
         #  mask一定是None
         # batchs_size.   (每个图选点的log概率依次求和)
-        ll = self._calc_log_likelihood(_log_p, pi, mask)
-        # print('_log_p:', _log_p, '  ', 'pi:', pi, '  ', 'mask:', mask)
-        if baseline!=None and not opts.test_only:
-                # 如果是ExponentialBaseline的话就是costs[0]（即n_path=0，第一个decoder）的平均数
-            bl_val, _ = baseline.eval(input, costs[0]) if bl_val is None else (bl_val, 0)
-            reinforce_loss = ((cost - bl_val) * ll).mean()
-            loss = reinforce_loss
-            loss.backward()
-        # batch_size x n_paths
-        costs = torch.stack(costs, 1)
+
         if return_pi:
-            return costs, lls, pi, agent_all
+            return costs, pi, agent_all
 
         if baseline != None:
-            return costs, ll, reinforce_loss
+            return costs, _log_p, pi, mask
 
 
-        return costs, lls
+        return costs, _log_p
 
     def beam_search(self, *args, **kwargs):
         return self.problem.beam_search(*args, **kwargs, model=self)

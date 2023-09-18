@@ -33,6 +33,16 @@ class Baseline(object):
 class WarmupBaseline(Baseline):
 
     def __init__(self, baseline, n_epochs=1, warmup_exp_beta=0.8, ):
+        """
+        use ExponentialBaseline to warm up the baseline model
+        return to real baseline when alpha > 0
+        args:
+            baseline(): baseline used in the training process
+            n_epochs(int): number of epochs to warm up
+            warmup_exp_beta(float): param in warm up
+        returns:
+            None
+        """
         super(Baseline, self).__init__()
 
         self.baseline = baseline
@@ -144,6 +154,15 @@ class CriticBaseline(Baseline):
 class RolloutBaseline(Baseline):
 
     def __init__(self, model, problem, opts, epoch=0):
+        """
+        rollout baseline in RL training
+        args:
+            model: torch model
+            problem(class): problem class
+            opts: parameter configuration
+            epoch(int): current epoch, just for printing
+        returns:
+        """
         super(Baseline, self).__init__()
 
         self.problem = problem
@@ -152,6 +171,14 @@ class RolloutBaseline(Baseline):
         self._update_model(model, epoch)
 
     def _update_model(self, model, epoch, dataset=None):
+        """
+        update baseline model when initialize baseline or current model is better than baseline model
+        args:
+            model: torch model
+            epoch(int): current epoch, just for printing
+            dataset(): dataset for evaluate the baseline model
+        returns:
+        """
         self.model = copy.deepcopy(model)
         # Always generate baseline dataset when updating model to prevent overfitting to the baseline dataset
 
@@ -169,11 +196,8 @@ class RolloutBaseline(Baseline):
         else:
             self.dataset = dataset
         print("Evaluating baseline model on evaluation dataset")
-        if not self.opts.test_only:
-            self.bl_vals = rollout(self.model, self.dataset, self.opts).cpu().numpy()
-        else:
-            self.bl_vals, self.pi, self.agent_all = rollout(self.model, self.dataset, self.opts)
-            self.bl_vals = self.bl_vals.cpu().numpy()
+
+        self.bl_vals = rollout(self.model, self.dataset, self.opts).cpu().numpy()
         self.mean = self.bl_vals.mean()
         self.epoch = epoch
 
