@@ -175,61 +175,57 @@ class AttentionModel(nn.Module):
         fixed = self._precompute(embeddings)
         j = 0
 
-        # TODO: 当前检查到这里
-        current_agent_index = 0
+        # batch_size: 当前时间步是哪个agent, 从agent0开始, 或说是上一时刻的agent
         current_agent = torch.zeros(states.agent_length.shape[0], dtype=torch.int64, device=states.agent_length.device)
         # shrink_size: 在state要结束的时候对batchs_size进行shrink，options里面设置
         # shrink_size不是None或当前path的state还没结束
         while not (self.shrink_size is None and states.all_finished(opts)):
-            # batch_size
+            # batch_size x 1    (当前agent的已行进路径长)
             current_length = states.agent_length.gather(1, current_agent[:, None])
+            # batch_size    (如果当前agent路径长超过了阈值就)
             current_agent = torch.where(current_length.squeeze(1) < opts.mean_distance, current_agent, torch.clamp(current_agent+1, 0, opts.n_agent-1))
             agent.append(current_agent)
             states = states._replace(prev_a=states.agent_prev_a.gather(1, current_agent[:, None]),
                                      used_capacity=states.agent_used_capacity.gather(1, current_agent[:, None]))
 
-            if j > 1 and j % n_EG == 0:
+            '''if j > 1 and j % n_EG == 0:
                 if not self.is_vrp:
                     mask_attn = mask ^ mask_first
                 else:
                     mask_attn = mask
                 # 根据当前的mask将attn中一些元素mask掉后重新算一遍embedding和embedding对应的fixed
                 embeddings, init_context = self.embedder.change(attn, V, h_old, mask_attn, self.is_tsp)
-                fixed = self._precompute(embeddings)
-            # log_p: batch_size x num_steps x graph_size+1
-            # mask: batch_size x 1 x graph_size+1，本身state（也就是StateCVRP类）中能保存mask
-            # （每次输出的mask是根据当前的visited和used capacity来的，这些在类中都有存储）
+                fixed = self._precompute(embeddings)'''
+            
+            # log_p: batch_size x 1 x graph_size+n_depot+n_agent    (每个点被选择的概率)
+            # mask: batch_size x 1 x graph_size+n_depot+n_agent
             log_p, mask = self._get_log_p(fixed, states, opts)
+            
             if j == 0:
                 mask_first = mask
-            # Select the indices of the next nodes in the sequences, result (batch_size) long
-            # log_p.exp()[:, 0, :]: batch_size x num_steps=1 x graph_size+1 => batch_size x graph_size+1
-            # mask[:, 0, :]: batch_size x 1 x graph_size+1 => batch_size_size x graph_size
+            
             # selected: batch_size，每个batch的graph被选中的点的index
-            selected = self._select_node(log_p.exp()[:, 0, :], mask[:, 0, :])  # Squeeze out steps dimension
-            # 更新prev_a，意义为本次每个batch选择的点的index, 更新经过当前位置（马上要离开的位置）后车已经使用的capacity
-            # used_capacity, 更新当前已经访问过的点的信息visited_, 更新当前各个batch的路径长度lengths = lengths,
-            # 更新前面prev_a对应点的坐标cur_coord = cur_coord, 更新i = self.i + 1这个就不知道是啥了
+            selected = self._select_node(log_p.exp()[:, 0, :], mask[:, 0, :]) 
+            
             states = states.update(selected, current_agent, opts)
-            # output存储softmax之后sample之前的值，sequence存储sample之后的确定的index
-            # Collect output of step
+            
             output.append(log_p[:, 0, :])
             sequence.append(selected)
 
             j += 1
-        # batch_size x len(output)=len(sequence) x graph_size+1, [i, j]是第i个batch的第j次decode的每个点访问的概率
+        # batch_size x len(output)=len(sequence) x graph_size+n_depot+n_agent, [i, j]是第i个batch的第j次decode的每个点访问的概率
         _log_p = torch.stack(output, 1)
         # batch_size x len(sequence)=len(output), [i,j]是第i个batch第j次encoder选择的点的index
         pi = torch.stack(sequence, 1)
         agent_all = torch.stack(agent, 1)
-        # print('pi:', pi.shape, 'n_path:', i)
+
         # cost: batch_size
         # mask: None
         cost, mask = self.problem.get_costs(input, pi, agent_all, self.n_agent, states, opts)
-        # costs: list, len=n_paths, 每个元素batch_size
+        # costs: list, batch_size
         costs.append(cost.detach())
         #  mask一定是None
-        #print('_log_p:', _log_p.requires_grad, 'pi:', pi.requires_grad)
+        # batchs_size.   (每个图选点的log概率依次求和)
         ll = self._calc_log_likelihood(_log_p, pi, mask)
         # print('_log_p:', _log_p, '  ', 'pi:', pi, '  ', 'mask:', mask)
         if baseline!=None and not opts.test_only:
@@ -292,7 +288,7 @@ class AttentionModel(nn.Module):
 
         # Get log_p corresponding to selected actions
         # mask一定是None
-        # _log_p = log_p: batch_size x len(output)=len(sequence) x graph_size+1
+        # _log_p = log_p: batch_size x len(output)=len(sequence) x graph_size+n_depot_n_agent
         # a = pi: batch_size x len(sequence)=len(output)
         # a.unsqueeze(-1): batch_size x len(sequence)=len(output) x 1
         # batch_size x len(sequence): 每个batch的每个被选择的点的对应的概率的对数
@@ -359,14 +355,14 @@ class AttentionModel(nn.Module):
         assert (probs == probs).all(), "Probs should not contain any nans"
 
         if self.decode_type == "greedy":
-            # 这个就是取每个batch里面最大的了，并通过assert来保证没有取到mask==1，即需要被mask掉的位置的元素
+            
             # 但这个应该不会取到被mask的元素，因为log_p（即probs）本身是经过mask的，被mask的元素极小不可能被取到
             # _: 每个batch的最大值，batch_size
             # selected: 每个batch对应最大值的index，batch_size
             _, selected = probs.max(1)
             assert not mask.gather(1, selected.unsqueeze(
                 -1)).data.any(), "Decode greedy: infeasible action has maximum probability"
-        # 程序中用的是sampling
+        
         elif self.decode_type == "sampling":
             # batch_size
             selected = probs.multinomial(1).squeeze(1)
@@ -429,33 +425,30 @@ class AttentionModel(nn.Module):
         )
 
     def _get_log_p(self, fixed, state, opts, normalize=True):
-        # fixed.context_node_projected：fixed_context, embeddings(batch_size x graph_size x embed_dim)对第二维求平均后经过
-        # 一个全连接层，batch_size x 1 x embed_dim
-        # project_step_context: embed_dim+1 => embed_dim (仅针对cvrp问题)
-        # fixed.node_embeddings: embeddings, batch_size x graph_size+1 x embed_dim
-        # self._get_parallel_step_context(fixed.node_embeddings, state)：batch_size x 1 x embed_dim+1，根据state中选择的每个
-        # batch的点的标号将其embedding取出来，并将对应batch下车剩余的capcity合并到其中(+1)，然后再经过一个全连接层处理
-        # self.project_step_context[path_index](self._get_parallel_step_context(fixed.node_embeddings, state)):
-        # batch_size x 1 x embed_dim
+
+        # fixed.context_node_projected：batch_size x 1 x embed_dim
+        # project_step_context: embed_dim+1 => embed_dim 
+        # fixed.node_embeddings: embeddings, batch_size x graph_size+n_depot+n_agent x embed_dim
+        # self._get_parallel_step_context(fixed.node_embeddings, state)：batch_size x 1 x embed_dim+1，每个batch
+        # 当前所在的点的embed_dim和当前剩余的capacity
+        # self.project_step_context(self._get_parallel_step_context(fixed.node_embeddings, state)):
+        # query: batch_size x 1 x embed_dim, 图信息+当前所在点embed和capacity信息
         query = fixed.context_node_projected + \
                 self.project_step_context(self._get_parallel_step_context(fixed.node_embeddings, state))
 
-        # Compute keys and values for the nodes
         # 如果不是sdvrp问题的话，就是fixed中的fixed.glimpse_key, fixed.glimpse_val, fixed.logit_key，
         # 对应维数
-        # glimpse_K=fixed.glimpse_key: n_heads x batch_size x num_steps x graph_size+1 x val_dim
-        # glimpse_V=fixed.glimpse_val: n_heads x batch_size x num_steps x graph_size+1 x val_dim
-        # logit_K=fixed.logit_key: batch_size x 1 x graph_size+1 x embed_dim
+        # glimpse_K=fixed.glimpse_key: n_heads x batch_size x num_steps x graph_size+n_depot+n_agent x val_dim
+        # glimpse_V=fixed.glimpse_val: n_heads x batch_size x num_steps x graph_size+n_depot+n_agent x val_dim
+        # logit_K=fixed.logit_key: batch_size x 1 x graph_size+n_depot+n_agent x embed_dim
         glimpse_K, glimpse_V, logit_K = self._get_attention_node_data(fixed, state)
 
-        # Compute the mask
-        # mask: batch_size x 1 x graph_size+1
-        # 1表示要被mask的，0表示正常的点，已经访问过的和
-        mask = state.get_mask(opts)  # 这个是没有改过的
+        # mask: batch_size x 1 x graph_size+n_depot+n_agent    (1表示要被mask的，0表示正常的点，已经访问过的和)
+        mask = state.get_mask(opts) 
 
-        # Compute logits (unnormalized log_p)
         # log_p=logits: batch_size x num_steps x graph_size+1
         # glimpse: (batch_size, num_steps, embed_dim)
+        # TODO: glimpse没用到
         log_p, glimpse = self._one_to_many_logits(query, glimpse_K, glimpse_V, logit_K, mask)
         # 就是True捏
         # self.temp就是1
@@ -506,12 +499,7 @@ class AttentionModel(nn.Module):
                     -1
                 )
             else:
-                # torch.gather的规则：torch.gather的输出维数和current_node.xxx的维数一样，1表示更改向量dim=1的维数。
-                # 对于current_node.xxx，对于每个元素(x,y,z)，将输出的(x,y,z)的位置的元素具体值改成(x,y',z)，其中y'为
-                # current_node.xxx在(x,y,z)位置的取值
-                # problem.VEHICLE_CAPACITY=1
-                # state.used_capacity[:, :, None]: batch_size x 1 x 1
-                # 返回的数据：batch_size x 1 x embed_dim+1，就是除了点的embed之外再加上当前货车剩余的capcity
+                # batch_size x 1 x embed_dim+1，就是除了点的embed之外再加上当前货车剩余的capcity
 
                 return torch.cat(
                     (
@@ -573,52 +561,49 @@ class AttentionModel(nn.Module):
             ), 1)
 
     def _one_to_many_logits(self, query, glimpse_K, glimpse_V, logit_K, mask):
-        # num_steps=1，querys是对embedding进行一系列操作后所得
+        # num_steps=1，图信息+当前所在点embed和capacity信息
         batch_size, num_steps, embed_dim = query.size()
         key_size = val_size = embed_dim // self.n_heads
 
-        # Compute the glimpse, rearrange dimensions so the dimensions are (n_heads, batch_size, num_steps, 1, key_size)
+        # n_heads x batch_size x 1 x 1 x val_dim   (query分head)
         glimpse_Q = query.view(batch_size, num_steps, self.n_heads, 1, key_size).permute(2, 0, 1, 3, 4)
-        # glimpse_K=fixed.glimpse_key: n_heads x batch_size x num_steps x graph_size+1 x val_dim
-        # glimpse_V=fixed.glimpse_val: n_heads x batch_size x num_steps x graph_size+1 x val_dim
-        # logit_K=fixed.logit_key: batch_size x 1 x graph_size+1 x embed_dim
-        # Batch matrix multiplication to compute compatibilities (n_heads, batch_size, num_steps, 1, graph_size+1)
+        
+        # glimpse_K=fixed.glimpse_key: n_heads x batch_size x 1 x graph_size+n_depot+n_agent x val_dim
+        # glimpse_V=fixed.glimpse_val: n_heads x batch_size x 1 x graph_size+n_depot+n_agent x val_dim
+        # logit_K=fixed.logit_key: batch_size x 1 x graph_size+n_depot+n_agent x embed_dim
+        # n_heads x batch_size x 1 x 1 x graph_size+n_depot+n_agent
         compatibility = torch.matmul(glimpse_Q, glimpse_K.transpose(-2, -1)) / math.sqrt(glimpse_Q.size(-1))
-        # self.mask_inner==True
+        
+        # TODO: 是否要进行这一步mask？
+        # 先是compatibility进行一次mask
         if self.mask_inner:
             assert self.mask_logits, "Cannot mask inner without masking logits"
-            # mask: batch_size x 1 x graph_size+1，其中1表示要被mask的，每个head是同样的位置被mask
+            # 每个head是同样的位置被mask
             compatibility[mask[None, :, :, None, :].expand_as(compatibility)] = -math.inf
 
-        # Batch matrix multiplication to compute heads (n_heads, batch_size, num_steps, 1, val_size)
+        # TODO: 查看点数比较少的图中的heads情况
+        # n_heads x batch_size x 1 x 1 x val_dim
         heads = torch.matmul(F.softmax(compatibility, dim=-1), glimpse_V)
 
-        # Project to get glimpse/updated context node embedding (batch_size, num_steps, embedding_dim)
-        #   (batch_size, num_steps, 1, n_heads, val_size)
-        # =>(batch_size, num_steps, 1, n_heads*val_size=embed_dim)
-        # =>(batch_size, num_steps, 1, n_heads*val_size=embed_dim)
+        #   (batch_size, 1, 1, n_heads, val_size)
+        # =>(batch_size, 1, 1, n_heads*val_size=embed_dim)
+        # =>(batch_size, 1, 1, embed_dim)
         glimpse = self.project_out(
             heads.permute(1, 2, 3, 0, 4).contiguous().view(-1, num_steps, 1, self.n_heads * val_size))
 
-        # Now projecting the glimpse is not needed since this can be absorbed into project_out
-        # final_Q = self.project_glimpse(glimpse)
-        # final_Q: (batch_size, num_steps, 1, n_heads*val_size=embed_dim)
+        # 上面的计算得到最终的query
         final_Q = glimpse
-        # Batch matrix multiplication to compute logits (batch_size, num_steps, graph_size)
-        # logits = 'compatibility'
-        # logit_K=fixed.logit_key: batch_size x num_steps=1 x graph_size+1 x embed_dim
-        # logits: batch_size x num_steps x graph_size+1
+        # logits: batch_size x 1 x graph_size+n_depot+n_agent
         logits = torch.matmul(final_Q, logit_K.transpose(-2, -1)).squeeze(-2) / math.sqrt(final_Q.size(-1))
 
-        # From the logits compute the probabilities by clipping, masking and softmax
         # 这个if也是True
         if self.tanh_clipping > 0:
             logits = F.tanh(logits) * self.tanh_clipping
         # logits进行一次mask
         if self.mask_logits:
             logits[mask] = -math.inf
-        # logits: batch_size x num_steps x graph_size+1
-        # glimpse.squeeze(-2): (batch_size, num_steps, n_heads * val_size=embed_dim)
+        # logits: batch_size x 1 x graph_size+n_depot+n_agent
+        # glimpse.squeeze(-2): (batch_size, 1, embed_dim)
         return logits, glimpse.squeeze(-2)
 
     def _get_attention_node_data(self, fixed, state):

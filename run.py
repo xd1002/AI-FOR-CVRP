@@ -70,9 +70,9 @@ def run(opts):
     ).to(opts.device)
 
     # 是否有多个gpu供并行
-    '''if opts.use_cuda and torch.cuda.device_count() > 1:
-        model = torch.nn.DataParallel(model, device_ids=[5, 6, 7])
-    '''
+    if opts.use_cuda and torch.cuda.device_count() > 1:
+        model = torch.nn.DataParallel(model)
+
     model_ = get_inner_model(model)
     # **model_.state_dict()和**load_data.get('model', {})是key一样的dict，将前面的value换成后面对应key的value
     # 这里model和model_共享id（指针）
@@ -98,7 +98,7 @@ def run(opts):
     optimizer = optim.Adam(
         [{'params': model.parameters(), 'lr': opts.lr_model}]
         + (
-            [{'params': baseline.get_learnable_parameters(), 'lr': opts.lr_critic}]
+           [{'params': baseline.get_learnable_parameters(), 'lr': opts.lr_critic}]
             if len(baseline.get_learnable_parameters()) > 0
             else []
         )

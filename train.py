@@ -142,7 +142,6 @@ def train_epoch(model, optimizer, baseline, lr_scheduler, epoch, val_dataset, pr
             tb_logger,
             opts
         )
-        return
         step += 1
         lr_scheduler.step(epoch)
 

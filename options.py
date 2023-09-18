@@ -85,17 +85,17 @@ def get_options(args=None):
     parser.add_argument('--safe_coef', type=float, default=10**(-6), help='coefficient used to Compensates for the lack of '
                                                                       'precision of single-precision floating-point '
                                                                       'numbers')
-    '''
-    # test_only
+
+    '''# test_only
     parser.add_argument('--eval_only', type=bool, default=True, help='Set this value to only evaluate model')
     parser.add_argument('--eval_batch_size', type=int, default=1,
                         help="Batch size to use during (baseline) evaluation")
     parser.add_argument('--load_path', default='E:\\xd\\project\\use_drl_to_solve_vrp\\MDAM-master\\MDAM-master-to-multi-depot0-unbalance\\data\\epoch-199.pt',
                         help='Path to load model parameters and optimizer state from')
     parser.add_argument('--test_only', type=bool, default=True, help='whether to test the pretrained model')
-    parser.add_argument('--val_dataset', type=str, default='data/test_data.pkl', help='Dataset file to use for validation')
+    parser.add_argument('--val_dataset', type=str, default='data/test_data.pkl', help='Dataset file to use for validation')'''
 
-    '''
+
     # train_only
     parser.add_argument('--eval_only', type=bool, default=False, help='Set this value to only evaluate model')
     parser.add_argument('--eval_batch_size', type=int, default=1024,

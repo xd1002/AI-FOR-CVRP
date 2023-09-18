@@ -70,19 +70,7 @@ class CVRP(object):
         # 每个batch的每个step的点的坐标选出来
         # batch_size x len(sequence) x 2
         #d = loc_with_depot.gather(1, pi[..., None].expand(*pi.size(), loc_with_depot.size(-1)))
-        '''
-        cost_all = torch.zeros(pi.shape[0], n_agent).cuda()
-        prev_coord_all = dataset['depot'][:, 0, :].view(pi.shape[0], 1, 3).repeat(1, n_agent, 1)
-        loc_with_depot = torch.cat((dataset['depot'], dataset['loc']), 1)
-        for i in range(pi.size(1)):
-            cur_coord = loc_with_depot.gather(1, pi[:, i].view(-1, 1, 1).repeat(1, 1, 3))  # batch_size x 1 x 3
-            prev_coord = prev_coord_all.gather(1, agent_all[:, i].view(-1, 1, 1).repeat(1, 1, 3))
-            prev_cost = cost_all.gather(1, agent_all[:, i].view(-1, 1))
-            prev_cost += (cur_coord - prev_coord).norm(p=2, dim=-1)
-            cost_all = cost_all.scatter(1, agent_all[:, i].view(-1, 1), prev_cost)
-            prev_coord_all = prev_coord_all.scatter(1, agent_all[:, i].view(-1, 1, 1).repeat(1, 1, 3), cur_coord)
-
-        '''
+        
         # Length is distance (L2-norm of difference) of each next location to its prev and of first and last to depot
         # batch_size, 每个batch_size的reward：路径长度（后面两个加法项：第一个是因为pi的index是从离开depot的第一个点开始的，
         # 相当于少加了第一段路的长度；第二个：本来pi的第二维就由）
@@ -126,8 +114,7 @@ class SDVRP(object):
     def get_costs(dataset, pi):
         batch_size, graph_size = dataset['demand'].size()
 
-        # Each node can be visited multiple times, but we always deliver as much demand as possible
-        # We check that at the end all demand has been satisfied
+        # 检验是否所有点都被访问
         demands = torch.cat(
             (
                 torch.full_like(dataset['demand'][:, :1], -SDVRP.VEHICLE_CAPACITY),

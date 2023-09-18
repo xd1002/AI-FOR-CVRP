@@ -62,25 +62,25 @@ class StateCVRP(NamedTuple):
         batch_size, n_loc, _ = loc.size()
         # batch_size x 1 x graph_size+n_agent+n_depot
         visited_ = torch.zeros(batch_size, 1, n_loc + opts.n_depot, dtype=torch.uint8, device=loc.device)
+        # 开始点mask掉
         visited_[:, :, opts.n_depot:opts.n_depot+opts.n_agent] = 1
         return StateCVRP(
-            coords=torch.cat((depot, loc), -2),  # batch_size x graph_size+n_depot+n_agent x 3
-            demand=demand,  # batch_size x graph_size+n_agent
-            ids=torch.arange(batch_size, dtype=torch.int64, device=loc.device)[:, None],  # Add steps dimension
-            prev_a=torch.zeros(batch_size, 1, dtype=torch.long, device=loc.device),
+            coords=torch.cat((depot, loc), -2),  # batch_size x graph_size+n_depot+n_agent x 3  (坐标，起点+depot+访问点)
+            demand=demand,  # batch_size x graph_size+n_agent   (demand，起点+访问点)
+            ids=torch.arange(batch_size, dtype=torch.int64, device=loc.device)[:, None],  
+            prev_a=torch.zeros(batch_size, 1, dtype=torch.long, device=loc.device),     # 各batch当前agent的所在点
             used_capacity=demand.new_zeros(batch_size, 1),
-            visited_=(  # Visited as mask is easier to understand, as long more memory efficient
-                # Keep visited_ with depot so we can scatter efficiently
+            visited_=(  
                 visited_
                 if visited_dtype == torch.uint8
-                else torch.zeros(batch_size, 1, (n_loc + 63) // 64, dtype=torch.int64, device=loc.device)  # Ceil
+                else torch.zeros(batch_size, 1, (n_loc + 63) // 64, dtype=torch.int64, device=loc.device)  
             ),
             lengths=torch.zeros(batch_size, 1, device=loc.device),
-            cur_coord=input['loc'][:, opts.n_depot:opts.n_depot+opts.n_agent, :],  # Add step dimension
-            i=torch.zeros(1, dtype=torch.int64, device=loc.device),  # Vector with length num_steps
+            cur_coord=input['loc'][:, opts.n_depot:opts.n_depot+opts.n_agent, :],  
+            i=torch.zeros(1, dtype=torch.int64, device=loc.device),  
             agent_length=torch.zeros((batch_size, n_agent), device=loc.device),
             agent_used_capacity=demand.new_zeros(batch_size, n_agent),
-            agent_prev_a=torch.arange(n_agent, dtype=torch.int64, device=loc.device).view(1, -1).repeat(batch_size, 1) + opts.n_depot,
+            agent_prev_a=torch.arange(n_agent, dtype=torch.int64, device=loc.device).view(1, -1).repeat(batch_size, 1) + opts.n_depot,  # 每个agent的当前所在点
             current_distance=loc.new_zeros(demand.shape),
             mask_depot=torch.zeros(batch_size, depot.shape[1], dtype=torch.bool, device=loc.device)
         )
@@ -95,22 +95,15 @@ class StateCVRP(NamedTuple):
 
         assert self.i.size(0) == 1, "Can only update if state represents single step"
 
-        # Update the state
         # batch_size x 1
-        selected = selected[:, None]  # Add dimension for step
+        selected = selected[:, None]  
         prev_a = selected
-        n_loc = self.demand.size(-1)  # Excludes depot
+        # graph_size+n_agent
+        n_loc = self.demand.size(-1)  
 
-        # Add the length
-        # self.ids: batch_size x a
-        # self.coords: batch_size x graph_size+1 x 2 （在原本的loc的前面加上depot的坐标）
-        # cur_coord: 选出每个batch的当前(下一个)所在点坐标,batch_size x 1 x 3
         agent_prev_a = self.agent_prev_a.scatter(-1, current_agent.view(-1, 1), prev_a)
+        # batch_size x graph_size+n_depot+n_agent x 2
         cur_coord = self.coords[self.ids, selected]
-        # cur_coord = self.coords.gather(
-        #     1,
-        #     selected[:, None].expand(selected.size(0), 1, self.coords.size(-1))
-        # )[:, 0, :]
         # self.lengths: batch_size x 1, 存放当前每个batch的路径长度
         # batch_size x 1
         current_agent_length = self.agent_length.gather(1, current_agent.view(-1, 1))
@@ -119,11 +112,12 @@ class StateCVRP(NamedTuple):
         # batch_size x 1 x 3
         prev_coord = self.coords[self.ids, selected_prev]
         selected_distance = (cur_coord - prev_coord).norm(p=2, dim=-1)
-        lengths = current_agent_length + selected_distance * (1 - self.visited_[:, :, opts.n_depot:].all(axis=-1))# (batch_dim, 1)
+        # 如果所有点都遍历完了就不计距离
+        lengths = current_agent_length + selected_distance * (1 - self.visited_[:, :, opts.n_depot:].all(axis=-1))
         agent_length = self.agent_length.scatter(-1, current_agent.view(-1, 1), lengths)
 
 
-        # Not selected_demand is demand of first node (by clamp) so incorrect for nodes that visit depot!
+        
         # selected_demand = self.demand.gather(-1, torch.clamp(prev_a - 1, 0, n_loc - 1))
         # 这个torch.clamp(prev_a - 1, 0, n_loc - 1)是干啥的
         current_used_capacity = self.agent_used_capacity.gather(1, current_agent.view(-1, 1))
@@ -167,51 +161,55 @@ class StateCVRP(NamedTuple):
         Forbids to visit depot twice in a row, unless all nodes have been visited
         :return:
         """
-        # self.visited_: batch_size x 1 x n_loc + 1
+        # self.visited_: batch_size x 1 x graph_size + n_agent  (depot外的其他点的mask情况)
         # 默认的是第一个，else就不用管了
         if self.visited_.dtype == torch.uint8:
-            visited_loc = self.visited_[:, :, opts.n_depot:]  # [: ,: ,0]和depot访问与否有关
+            visited_loc = self.visited_[:, :, opts.n_depot:] 
         else:
             visited_loc = mask_long2bool(self.visited_, n=self.demand.size(-1))
-        # Nodes that cannot be visited are already visited or too much demand to be served now
-        # self.ids: batch_size x 1
-        # self.demand[self.ids, :]: batch_size x 1 graph_size, self.ids作为self.demand的index可以把他
-        # 从batch_size x graph_size变成batch_size x 1 graph_size
+
+        # TODO: 是当前所在点吗
+        # batch_size x 1    (当前所在点)
         current_node = self.get_current_node()
-        # batch_size x 1 x 3
+        # batch_size x 1 x 3    (当前所在点的坐标)
         current_node_coords = self.coords.gather(1, current_node[:, :, None].repeat(1, 1, 3))
-        # batch_size x graph_size
+        # batch_size x graph_size+n_agent   (当前点到除了depot外其他所有点到距离)
         self.current_distance[:] = (self.coords[:, opts.n_depot:, :] - current_node_coords).norm(p=2, dim=-1)
-        # batch_size x n_depot x graph_size
+        # batch_size x n_depot x graph_size+n_agent   (当前点到除了depot外其他所有点到距离+所有点到各个depot到距离)
+        # 防止下一步的电量不支持无人机去向任意一个点(包括充电桩)
         future_distance = self.current_distance.unsqueeze(1).repeat(1, opts.n_depot, 1) + \
                          (self.coords[:, opts.n_depot:, :].unsqueeze(1).repeat(1, opts.n_depot, 1, 1) -
-                          self.coords[:, :opts.n_depot, :].unsqueeze(1).view(-1, opts.n_depot, 1, 3)).norm(p=2, dim=-1)
-        # batch_size x n_depot x graph_size
+                          self.coords[:, :opts.n_depot, :].unsqueeze(2)).norm(p=2, dim=-1)
+        # batch_size x n_depot x graph_size+n_agent   (当前demand包含下一个点的demand+到下一个点和下一个点到depot的总损失电量, 即考虑未来信息)
+        # TODO: demand更新的时候有没有将future_distance算入
         current_demand = self.demand.unsqueeze(1).repeat(1, opts.n_depot, 1) + future_distance * opts.dist_coef
+        # batch_size x 1 x graph_size+n_agent   (mask掉之前已经访问的和当前到不了的)
         mask_loc = (
             visited_loc |
-            # For demand steps_dim is inserted by indexing with id, for used_capacity insert node dim for broadcasting
-            # 每个batch的每个demand与当前每个batch的used_capacity相加
             (torch.sum((current_demand + self.used_capacity.unsqueeze(1).repeat(1, opts.n_depot, 1) > self.VEHICLE_CAPACITY - opts.safe_coef), axis=1) == opts.n_depot)[:, None, :]
         )
 
-        # Cannot visit the depot if just visited and still unserved nodes
-        # 当前所在节点（或称作上一个节点）就是depot或者上面的mask_loc每行中还有元素为0（未被访问）就mask掉depot
+        # batch_size x n_depot  (当前所在节点（或称作上一个节点）就是depot或者上面的mask_loc每行中还有元素为0（未被访问）就mask掉depot)
         for i in range(opts.n_depot):
             self.mask_depot[:, i] = (self.prev_a.squeeze(1) == i) & ((mask_loc == 0).int().sum(-1) > 0).squeeze(1)
-        # batch_size x n_depot
+
+        # batch_size x n_depot  (当前所在点到各个depot的距离)
         dist_to_depot = (self.coords[:, :opts.n_depot, :] - current_node_coords).norm(p=2, dim=-1)
-        # batch_size x n_depot
+        # batch_size x n_depot  (当前所在点到各个depot所需capacity)
         to_depot_used_capacity = self.used_capacity.repeat(1, opts.n_depot) + dist_to_depot * opts.dist_coef
         # 一方面mask掉上次在depot且还有可以访问的点的情况，只要有一个depot因为这种情况被mask则其余depot也要被mask
         # 在此基础上，mask掉能耗不够到达的depot（上面mask_loc中保证每一步一定能到达其中一个depot）
         self.mask_depot[:] = ((~torch.prod(~self.mask_depot, axis=1, dtype=bool).view(-1, 1).repeat(1, opts.n_depot)) | (to_depot_used_capacity > self.VEHICLE_CAPACITY))
+
+        # 这部分只是test使用
         final_mask = torch.cat((self.mask_depot[:, None, :], mask_loc > 0),-1)
         if ((final_mask == True).all(axis=-1) == True).any():
             for i in range(final_mask.shape[0]):
                 if (final_mask[i] == True).all():
                     print(to_depot_used_capacity[i])
-        return torch.cat((self.mask_depot[:, None, :], mask_loc > 0),-1)
+
+        # self.mask_depot = torch.ones_like(self.mask_depot)
+        return torch.cat((self.mask_depot[:, None, :], mask_loc > 0), -1)
 
     def construct_solutions(self, actions):
         return actions
