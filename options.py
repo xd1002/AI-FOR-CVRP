@@ -37,7 +37,7 @@ def get_options(args=None):
     # , action = 'store_true'
 
 
-    parser.add_argument('--n_epochs', type=int, default=3, help='The number of epochs to train')
+    parser.add_argument('--n_epochs', type=int, default=50, help='The number of epochs to train')
     parser.add_argument('--seed', type=int, default=1234, help='Random seed to use')
     parser.add_argument('--max_grad_norm', type=float, default=1.0,
                         help='Maximum L2 norm for gradient clipping, default 1.0 (0 to disable clipping)')
@@ -96,11 +96,11 @@ def get_options(args=None):
 
 
     # train_only
+    parser.add_argument('--test_only', action='store_false', help='whether to test the pretrained model')
     parser.add_argument('--eval_only', type=bool, default=False, help='Set this value to only evaluate model')
     parser.add_argument('--eval_batch_size', type=int, default=1024,
                         help="Batch size to use during (baseline) evaluation")
     parser.add_argument('--load_path', default=None, help='Path to load model parameters and optimizer state from')
-    parser.add_argument('--test_only', type=bool, default=False, help='whether to test the pretrained model')
     #parser.add_argument('--load_path', default='D:\\xd\\project\\Combinatorial-Optimization-and-Artificial-Intelligence\\MDAM-master\\MDAM-master-to-3d-0\\outputs\\cvrp_30\\run_20221110T222210\\epoch-99.pt',help='Path to load model parameters and optimizer state from')
     parser.add_argument('--val_dataset', type=str, default=None, help='Dataset file to use for validation')
     #'''
@@ -121,7 +121,7 @@ def get_options(args=None):
             opts.run_name
         )
     opts.test_absolute_dir = os.path.join(
-        'E:\\xd\\project\\use_drl_to_solve_vrp\\MDAM-master\\MDAM-master-to-multi-depot0-unbalance',
+        os.getcwd(),
         opts.test_dir,
         "{}_{}".format(opts.problem, opts.graph_size),
         opts.run_name

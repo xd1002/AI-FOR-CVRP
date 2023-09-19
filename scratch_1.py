@@ -762,3 +762,7 @@ print(outputs.shape)
 ##
 from xgboost import XGBClassifier
 a = XGBClassifier()
+##
+data = np.hstack((np.random.uniform(size=(26, 3)), np.zeros((26, 1))))
+a = pd.DataFrame(data)
+a.to_csv("C:\\Users\\xd1002\\Desktop\\AI-FOR-CVRP\\data\\test.csv", header=False, index=False)

@@ -52,7 +52,7 @@ class StateCVRP(NamedTuple):
     #     return len(self.used_capacity)
 
     @staticmethod
-    def initialize(input, n_agent, opts, visited_dtype=torch.uint8):
+    def initialize(input, opts, visited_dtype=torch.uint8):
         # input: dict={'loc': tensor.shape = (batch_size, graph_size+n_agent, 3),
         #              'demand': tensor.shape = (batch_size, graph_size+n_agent),
         #              'depot': tensor.shape = (batch_size, n_depot)}
@@ -78,9 +78,9 @@ class StateCVRP(NamedTuple):
             lengths=torch.zeros(batch_size, 1, device=loc.device),
             cur_coord=input['loc'][:, opts.n_depot:opts.n_depot+opts.n_agent, :],  
             i=torch.zeros(1, dtype=torch.int64, device=loc.device),  
-            agent_length=torch.zeros((batch_size, n_agent), device=loc.device),
-            agent_used_capacity=demand.new_zeros(batch_size, n_agent),
-            agent_prev_a=torch.arange(n_agent, dtype=torch.int64, device=loc.device).view(1, -1).repeat(batch_size, 1) + opts.n_depot,  # 每个agent的当前所在点
+            agent_length=torch.zeros((batch_size, opts.n_agent), device=loc.device),
+            agent_used_capacity=demand.new_zeros(batch_size, opts.n_agent),
+            agent_prev_a=torch.arange(opts.n_agent, dtype=torch.int64, device=loc.device).view(1, -1).repeat(batch_size, 1) + opts.n_depot,  # 每个agent的当前所在点
             current_distance=loc.new_zeros(demand.shape),
             mask_depot=torch.zeros(batch_size, depot.shape[1], dtype=torch.bool, device=loc.device)
         )

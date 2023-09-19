@@ -23,7 +23,7 @@ def run(opts):
     with open(os.path.join(opts.save_dir, "args.json"), 'w') as f:
         json.dump(vars(opts), f, indent=True)
 
-    opts.device = torch.device("cuda:0" if opts.use_cuda else "cpu")
+    opts.device = torch.device("cpu")
 
     problem = load_problem(opts.problem)
     load_data = {}
@@ -55,8 +55,9 @@ def run(opts):
     model.load_state_dict({**model.state_dict(), **load_data.get('model', {})})
      
     val_dataset = problem.make_dataset(
-        size=opts.graph_size, num_samples=opts.val_size, filename=opts.val_dataset, distribution=opts.data_distribution, opts=opts)
-    
+        size=opts.graph_size, num_samples=opts.val_size,
+        filename=opts.val_dataset, distribution=opts.data_distribution, opts=opts)
+
     predict_path(model, val_dataset, opts)
 
 

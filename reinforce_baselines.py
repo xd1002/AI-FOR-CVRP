@@ -37,7 +37,7 @@ class WarmupBaseline(Baseline):
         use ExponentialBaseline to warm up the baseline model
         return to real baseline when alpha > 0
         args:
-            baseline(): baseline used in the training process
+            baseline(): baseline used to calculate the baseline value in reinforce loss
             n_epochs(int): number of epochs to warm up
             warmup_exp_beta(float): param in warm up
         returns:

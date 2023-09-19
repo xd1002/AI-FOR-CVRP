@@ -129,33 +129,24 @@ class AttentionModel(nn.Module):
 
     def forward(self, input, opts=None, baseline=None, bl_val=None, return_pi=False):
         """
-        :param input: dict={'loc': tensor.shape = (batch_size, graph_size+n_agent, 3),
-                            'demand': tensor.shape = (batch_size, graph_size+n_agent),
-                            'depot': tensor.shape = (batch_size, n_depot)}
-        :param return_pi: whether to return the output sequences, this is optional as it is not compatible with
-        using DataParallel as the results may be of different lengths on different GPUs
-        :return:
+        model forward propagation
+        args:
+            input: dict={'loc': tensor.shape = (batch_size, graph_size+n_agent, 3),
+                         'demand': tensor.shape = (batch_size, graph_size+n_agent),
+                         'depot': tensor.shape = (batch_size, n_depot)}
+            opts: parameter configuration
+            baseline(class):
+        return:
         """
-        # self._init_embed(input): batch_size x graph_size+1 x embedding_dim
-        # embeddings: batch_size x graph_size+1 x embed_dim
-        # init_context: batch_size x embedding_dim
-        # attn: n_heads x batch_size x graph_size+1 x graph_size+1
-        # v: n_heads x batch_size x graph_size+1 x val_dim
-        # h_old: batch_size x graph_size+1 x embed_dim
-        # 这里这些graph_size+1相当于把仓库depot的位置也加入loc中，作为整个问题的一部分
-        # embeddings, init_context, attn, V, h_old = self.embedder(self._init_embed(input))
-
         costs, lls = [], []
         
         # input: dict={'loc': tensor.shape = (batch_size, graph_size+n_agent, 2),
         #              'demand': tensor.shape = (batch_size, graph_size+n_agent),
         #              'depot': tensor.shape = (batch_size, n_depot)}
-        # TODO: 删除一些冗余的输入参数
-        states = self.problem.make_state(input, self.n_agent, opts=opts)
-        output, sequence = [], []
-        agent = []
+        states = self.problem.make_state(input, opts=opts)
+        output, sequence, agent = [], [], []
 
-        # self._init_embed(input): batch_size x n_depot+graph_size+n_agent x embedding_dim
+        # self._init_embed(input): batch_size x n_depot+graph_size+n_agent x embedding_dim  (图信息的初始embedding)
         # embeddings: batch_size x n_depot+graph_size+n_agent x embed_dim   (图信息的最终embedding)
         # init_context: batch_size x embedding_dim  (embeddings在第二维求平均)
         # attn: n_heads x batch_size x graph_size+n_depot+n_agent x graph_size+n_depot+n_agent    (基于最后一维softmax)
@@ -180,18 +171,16 @@ class AttentionModel(nn.Module):
             # batch_size x 1    (当前agent的已行进路径长)
             current_length = states.agent_length.gather(1, current_agent[:, None])
             # batch_size    (如果当前agent路径长超过了阈值就)
-            current_agent = torch.where(current_length.squeeze(1) < opts.mean_distance, current_agent, torch.clamp(current_agent+1, 0, opts.n_agent-1))
+            current_agent = torch.where(current_length.squeeze(1) < opts.mean_distance,
+                                        current_agent, torch.clamp(current_agent+1, 0, opts.n_agent-1))
             agent.append(current_agent)
             states = states._replace(prev_a=states.agent_prev_a.gather(1, current_agent[:, None]),
                                      used_capacity=states.agent_used_capacity.gather(1, current_agent[:, None]))
 
 
-            # log_p: batch_size x 1 x graph_size+n_depot+n_agent    (每个点被选择的概率)
+            # log_p: batch_size x 1 x graph_size+n_depot+n_agent  (每个点被选择的概率)
             # mask: batch_size x 1 x graph_size+n_depot+n_agent
             log_p, mask = self._get_log_p(fixed, states, opts)
-            
-            if j == 0:
-                mask_first = mask
             
             # selected: batch_size，每个batch的graph被选中的点的index
             selected = self._select_node(log_p.exp()[:, 0, :], mask[:, 0, :]) 
@@ -202,28 +191,24 @@ class AttentionModel(nn.Module):
             sequence.append(selected)
 
             j += 1
-        # batch_size x len(output)=len(sequence) x graph_size+n_depot+n_agent, [i, j]是第i个batch的第j次decode的每个点访问的概率
+        # batch_size x len(output)=len(sequence) x graph_size+n_depot+n_agent
         _log_p = torch.stack(output, 1)
-        # batch_size x len(sequence)=len(output), [i,j]是第i个batch第j次encoder选择的点的index
+        # batch_size x len(sequence)=len(output)
         pi = torch.stack(sequence, 1)
         agent_all = torch.stack(agent, 1)
 
         # cost: batch_size
         # mask: None
         cost, mask = self.problem.get_costs(input, pi, agent_all, self.n_agent, states, opts)
-        # costs: list, batch_size
-        costs.append(cost.detach())
-        #  mask一定是None
-        # batchs_size.   (每个图选点的log概率依次求和)
 
         if return_pi:
-            return costs, pi, agent_all
+            return cost, pi, agent_all
 
         if baseline != None:
-            return costs, _log_p, pi, mask
+            return cost, _log_p, pi, mask
 
 
-        return costs, _log_p
+        return cost, _log_p
 
     def beam_search(self, *args, **kwargs):
         return self.problem.beam_search(*args, **kwargs, model=self)

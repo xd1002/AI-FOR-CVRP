@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 
 import torch
 import torch.optim as optim
-# from tensorboard_logger import Logger as TbLogger
+from tensorboard_logger import Logger as TbLogger
 
 
 from options import get_options
@@ -26,7 +26,7 @@ from utils import torch_load_cpu, load_problem
 
 def run(opts):
     """
-    Training framework
+    initialize training framework
     args:
         opts: parameter configuration
     returns:
@@ -35,9 +35,9 @@ def run(opts):
     torch.manual_seed(opts.seed)
 
     tb_logger = None
-    if not opts.test_only:
-        if not opts.no_tensorboard:
-            tb_logger = TbLogger(os.path.join(opts.log_dir, "{}_{}".format(opts.problem, opts.graph_size), opts.run_name))
+
+    if not opts.no_tensorboard:
+        tb_logger = TbLogger(os.path.join(opts.log_dir, "{}_{}".format(opts.problem, opts.graph_size), opts.run_name))
 
     os.makedirs(opts.save_dir)
     with open(os.path.join(opts.save_dir, "args.json"), 'w') as f:
@@ -81,21 +81,18 @@ def run(opts):
     # 这里model和model_共享id（指针）
     model_.load_state_dict({**model_.state_dict(), **load_data.get('model', {})})
 
-    if not opts.eval_only:
-        if opts.baseline == 'exponential':
-            baseline = ExponentialBaseline(opts.exp_beta)
-        elif opts.baseline == 'rollout':
-            baseline = RolloutBaseline(model, problem, opts)
-        else:
-            assert opts.baseline is None, "Unknown baseline: {}".format(opts.baseline)
-            baseline = NoBaseline()
-        if opts.bl_warmup_epochs > 0:
-            baseline = WarmupBaseline(baseline, opts.bl_warmup_epochs, warmup_exp_beta=opts.exp_beta)
 
-        if 'baseline' in load_data:
-            baseline.load_state_dict(load_data['baseline'])
+    if opts.baseline == 'exponential':
+        baseline = ExponentialBaseline(opts.exp_beta)
+    elif opts.baseline == 'rollout':
+        baseline = RolloutBaseline(model, problem, opts)
     else:
+        assert opts.baseline is None, "Unknown baseline: {}".format(opts.baseline)
         baseline = NoBaseline()
+    if opts.bl_warmup_epochs > 0:
+        baseline = WarmupBaseline(baseline, opts.bl_warmup_epochs, warmup_exp_beta=opts.exp_beta)
+    if 'baseline' in load_data:
+        baseline.load_state_dict(load_data['baseline'])
 
     # 只有第一个params有用
     optimizer = optim.Adam(
@@ -118,11 +115,12 @@ def run(opts):
     lr_scheduler = optim.lr_scheduler.LambdaLR(optimizer, lambda epoch: opts.lr_decay ** epoch)
 
     # filename!=None: 使用外部数据（generate_data.py生成）
-    # else: data = [{'loc': tensor.shape = (graph_size+n_agent, 2),
+    # else: data = [{'loc': tensor.shape = (graph_size+n_agent, 3),
     #               'demand': tensor.shape = (graph_size+n_agent),
     #               'depot': tensor.shape = (n_depot)}] * val_size
     val_dataset = problem.make_dataset(
-        size=opts.graph_size, num_samples=opts.val_size, filename=opts.val_dataset, distribution=opts.data_distribution, opts=opts)
+        size=opts.graph_size, num_samples=opts.val_size, filename=opts.val_dataset,
+        distribution=opts.data_distribution, opts=opts)
     
     if opts.resume:
         epoch_resume = int(os.path.splitext(os.path.split(opts.resume)[-1])[0].split("-")[1])
@@ -130,28 +128,22 @@ def run(opts):
         torch.set_rng_state(load_data['rng_state'])
         if opts.use_cuda:
             torch.cuda.set_rng_state_all(load_data['cuda_rng_state'])
-        # Set the random states
-        # Dumping of state was done before epoch callback, so do that now (model is loaded)
         baseline.epoch_callback(model, epoch_resume)
         print("Resuming after {}".format(epoch_resume))
         opts.epoch_start = epoch_resume + 1
 
-    if opts.eval_only:
-        validate(model, val_dataset, opts)
-    else:
-        # n_epochs个epoch，每个epoch用epoch_size个数据（图）训练，这epoch_size个数据分成多个batch（给定batch_size）
-        for epoch in range(opts.epoch_start, opts.epoch_start + opts.n_epochs):
-            train_epoch(
-                model,
-                optimizer,
-                baseline,
-                lr_scheduler,
-                epoch,
-                val_dataset,
-                problem,
-                tb_logger,
-                opts
-            )
+    for epoch in range(opts.epoch_start, opts.epoch_start + opts.n_epochs):
+        train_epoch(
+            model,
+            optimizer,
+            baseline,
+            lr_scheduler,
+            epoch,
+            val_dataset,
+            problem,
+            tb_logger,
+            opts
+        )
             
 
 

@@ -2,7 +2,7 @@ from torch.utils.data import Dataset
 import torch
 import os
 import pickle
-import numpy as np
+import pandas as pd
 
 from problems.vrp.state_cvrp import StateCVRP
 from problems.vrp.state_sdvrp import StateSDVRP
@@ -54,7 +54,7 @@ class CVRP(object):
         # 这个不是前面sort过的而是打乱顺序的
         d = demand_with_depot.gather(1, pi)
         # batch_size
-        used_cap = torch.zeros(pi.shape[0], n_agent).cuda()
+        used_cap = torch.zeros(pi.shape[0], n_agent, device=opts.device)
         # 看每一步的demand是否满足要求
         for i in range(pi.size(1)):
             cur_cap = used_cap.gather(1, agent_all[:, i].view(-1, 1))
@@ -192,33 +192,44 @@ class VRPDataset(Dataset):
         args:
             filename(string): path of the saved dataset
             size(int): graph size
-            num_samples(int):
+            num_samples(int): number of graph
         """
         super(VRPDataset, self).__init__()
 
         self.data_set = []
-        # 如果是用别人提供的数据
+        CAPACITIES = {
+            10: 20.,
+            20: 3000.,
+            50: 40.,
+            100: 50.
+        }
         if filename is not None:
-            assert os.path.splitext(filename)[1] == '.pkl'
+            if os.path.splitext(filename)[1] == '.pkl':
+                with open(filename, 'rb') as f:
+                    data = pickle.load(f)
+                self.data = [make_instance(args) for args in data[offset:offset + num_samples]]
+            else:
+                assert os.path.splitext(filename)[1] == '.csv'
+                df = pd.read_csv(filename, header=None)
+                self.data = [
+                    {
+                        'loc': torch.FloatTensor(df.iloc[opts.n_depot:, :3].values),
+                        'demand': torch.FloatTensor(df.iloc[opts.n_depot:, 3].values),
+                        'depot': torch.FloatTensor(df.iloc[:opts.n_depot, :3].values)
+                    }
+                    for i in range(num_samples)
+                ]
 
-            with open(filename, 'rb') as f:
-                data = pickle.load(f)
-            self.data = [make_instance(args) for args in data[offset:offset+num_samples]]
-        # 如果在程序中生成数据
+
+
         else:
 
             # From VRP with RL paper https://arxiv.omake_datasetrg/abs/1802.04240
-            CAPACITIES = {
-                10: 20.,
-                20: 3000.,
-                50: 40.,
-                100: 50.
-            }
+
 
             self.data = [
                 {
                     'loc': torch.FloatTensor(size+opts.n_agent, 3).uniform_(0, 1),
-                    # Uniform 1 - 9, scaled by capacities
                     'demand': (torch.FloatTensor(size+opts.n_agent).uniform_(0, 9).int() + 1).float() / CAPACITIES[size],
                     'depot': torch.FloatTensor(opts.n_depot, 3).uniform_(0, 1)
                 }

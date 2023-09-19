@@ -23,7 +23,26 @@ def get_inner_model(model):
     return model.module if isinstance(model, DataParallel) else model
 
 def predict_path(model, dataset, opts):
-    cost, pi, agent_all = rollout(model, dataset, opts)
+    set_decode_type(model, "greedy")
+    def eval_model_bat(bat):
+        with torch.no_grad():
+            cost, pi, agent_all = model(bat, opts=opts, return_pi=True)
+            return cost.data, pi.data, agent_all.data
+
+    cost, pi, agent = None, None, None
+    for bat in tqdm(DataLoader(dataset, batch_size=opts.eval_batch_size), disable=opts.no_progress_bar):
+        cost_, pi_, agent_all_ = eval_model_bat(bat)
+        if cost == None:
+            cost, pi, agent_all = cost_, pi_, agent_all_
+        else:
+            cost = torch.cat([cost, cost_], 0)
+            pi = torch.cat([pi, pi_], 1)
+            agent_all = torch.cat([agent_all, agent_all_], 1)
+    pi, agent_all = pi.numpy(), agent_all.numpy()
+
+    if not os.path.exists(opts.test_absolute_dir):
+        os.makedirs(opts.test_absolute_dir)
+
     np.savetxt('{}\\routine.csv'.format(opts.test_absolute_dir), pi, delimiter=',')
     np.savetxt('{}\\agent_all.csv'.format(opts.test_absolute_dir), agent_all, delimiter=',')
     avg_cost = cost.mean()
@@ -50,35 +69,16 @@ def rollout(model, dataset, opts):
 
     def eval_model_bat(bat):
         with torch.no_grad():
-            if opts.test_only:
-                cost, _, pi, agent_all = model(move_to(bat, opts.device), opts=opts, return_pi=True)
-                cost, _ = torch.min(cost, 1)
-                return cost.data.cpu(), pi.data.cpu(), agent_all.data.cpu()
-            else:
-                cost, _ = model(move_to(bat, opts.device), opts=opts)
-                cost, _ = torch.min(cost, 1)
-                return cost.data.cpu()
+            cost, _ = model(move_to(bat, opts.device), opts=opts)
+            return cost.data.cpu()
 
-    if opts.test_only:
-        return torch.cat([
-            eval_model_bat(bat)[0]
-            for bat
-            in tqdm(DataLoader(dataset, batch_size=opts.eval_batch_size), disable=opts.no_progress_bar)
-        ], 0), torch.cat([
-            eval_model_bat(bat)[1]
-            for bat
-            in tqdm(DataLoader(dataset, batch_size=opts.eval_batch_size), disable=opts.no_progress_bar)
-        ], 1).numpy(), torch.cat([
-            eval_model_bat(bat)[2]
-            for bat
-            in tqdm(DataLoader(dataset, batch_size=opts.eval_batch_size), disable=opts.no_progress_bar)
-        ], 1).numpy()
-    else:
-        return torch.cat([
-            eval_model_bat(bat)
-            for bat
-            in tqdm(DataLoader(dataset, batch_size=opts.eval_batch_size), disable=opts.no_progress_bar)
-        ], 0)
+
+
+    return torch.cat([
+        eval_model_bat(bat)
+        for bat
+        in tqdm(DataLoader(dataset, batch_size=opts.eval_batch_size), disable=opts.no_progress_bar)
+    ], 0)
 
 
 def clip_grad_norms(param_groups, max_norm=math.inf):
@@ -102,6 +102,21 @@ def clip_grad_norms(param_groups, max_norm=math.inf):
 
 
 def train_epoch(model, optimizer, baseline, lr_scheduler, epoch, val_dataset, problem, tb_logger, opts):
+    """
+    training framework
+    args:
+        model: torch model
+        optimizer: torch optimizer
+        baseline(class): baseline used to calculate the baseline value in reinforce loss
+        lr_scheduler: learning rate decay
+        epoch(int): current epoch
+        val_dataset(class):
+        problem(class): problem class
+        tb_logger: tensorboard_logger
+        opts: parameter configuration
+    returns:
+
+    """
     print("Start train epoch {}, lr={} for run {}".format(epoch, optimizer.param_groups[0]['lr'], opts.run_name))
     # epoch_size每个epoch多少graph
     step = epoch * (opts.epoch_size // opts.batch_size)
@@ -124,7 +139,7 @@ def train_epoch(model, optimizer, baseline, lr_scheduler, epoch, val_dataset, pr
     # 共epoch_size个
     training_dataset = baseline.wrap_dataset(problem.make_dataset(
         size=opts.graph_size, num_samples=opts.epoch_size, distribution=opts.data_distribution, opts=opts))
-    # TODO: 是否是一个迭代器
+
     # 一个迭代器，每个是一个
     # dict={'loc': tensor.shape = (batch_size, graph_size+n_agent, 3),
     #       'demand': tensor.shape = (batch_size, graph_size+n_agent),
@@ -132,6 +147,7 @@ def train_epoch(model, optimizer, baseline, lr_scheduler, epoch, val_dataset, pr
     training_dataloader = DataLoader(training_dataset, batch_size=opts.batch_size, num_workers=0)
 
     model.train()
+    # sample action from distribution when training
     set_decode_type(model, "sampling")
 
     for batch_id, batch in enumerate(tqdm(training_dataloader, disable=opts.no_progress_bar)):
@@ -188,26 +204,32 @@ def train_batch(
 ):
 
     optimizer.zero_grad()
-    # x: dict={'loc': tensor.shape = (batch_size, graph_size+n_agent, 3),
-    #          'demand': tensor.shape = (batch_size, graph_size+n_agent),
-    #          'depot': tensor.shape = (batch_size, n_depot)}
+    # if warmup:
+    # x: dict = {'loc': tensor.shape = (batch_size, graph_size+n_agent, 3),
+    #            'demand': tensor.shape = (batch_size, graph_size+n_agent),
+    #            'depot': tensor.shape = (batch_size, n_depot)}
+    # bl_val = None
+    # if rollout:
+    # x: dict = {'loc': tensor.shape = (batch_size, graph_size+n_agent, 3),
+    #            'demand': tensor.shape = (batch_size, graph_size+n_agent),
+    #            'depot': tensor.shape = (batch_size, n_depot)}
+    # TODO: bl_val in rollout baseline
+    # bl_val =
     x, bl_val = baseline.unwrap_batch(batch)
     x = move_to(x, opts.device)
     bl_val = move_to(bl_val, opts.device) if bl_val is not None else None
     cost, _log_p, pi, mask = model(x, opts, baseline, bl_val)
 
     ll = model._calc_log_likelihood(_log_p, pi, mask)
-    # print('_log_p:', _log_p, '  ', 'pi:', pi, '  ', 'mask:', mask)
-    if baseline != None and not opts.test_only:
-        # 如果是ExponentialBaseline的话就是costs[0]（即n_path=0，第一个decoder）的平均数
-        bl_val, _ = baseline.eval(input, cost) if bl_val is None else (bl_val, 0)
+    if baseline != None:
+        # ExponentialBaseline: 开始是cost的平均，后面是当前bl_val和当前cost平均的加权求和
+        # rolloutbaseline: 模型输出的cost
+        # bl_val: 1
+        bl_val, _ = baseline.eval(x, cost) if bl_val is None else (bl_val, 0)
         reinforce_loss = ((cost - bl_val) * ll).mean()
         loss = reinforce_loss
         loss.backward()
     # batch_size x n_paths
-    costs = torch.stack([cost], 1)
-
-    costs, _ = torch.min(costs, 1)
     # Clip gradient norms and get (clipped) gradient norms for logging
     grad_norms = clip_grad_norms(optimizer.param_groups, opts.max_grad_norm)
     if grad_norms[0][0] != grad_norms[0][0]:
@@ -216,7 +238,6 @@ def train_batch(
         return
     optimizer.step()
     # Logging
-    '''if step % int(opts.log_step) == 0:
-        log_values(costs, grad_norms, epoch, batch_id, step,
-                   log_likelihood, log_likelihood.mean(), 0, tb_logger, opts)'''
+    if step % int(opts.log_step) == 0:
+        log_values(cost, grad_norms, epoch, batch_id, step, 0, tb_logger, opts)
 

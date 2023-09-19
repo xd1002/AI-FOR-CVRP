@@ -1,5 +1,5 @@
 def log_values(cost, grad_norms, epoch, batch_id, step,
-               log_likelihood, reinforce_loss, bl_loss, tb_logger, opts):
+               bl_loss, tb_logger, opts):
     avg_cost = cost.mean().item()
     grad_norms, grad_norms_clipped = grad_norms
 
@@ -11,9 +11,6 @@ def log_values(cost, grad_norms, epoch, batch_id, step,
     # Log values to tensorboard
     if not opts.no_tensorboard:
         tb_logger.log_value('avg_cost', avg_cost, step)
-
-        tb_logger.log_value('actor_loss', reinforce_loss.item(), step)
-        tb_logger.log_value('nll', -log_likelihood.mean().item(), step)
 
         tb_logger.log_value('grad_norm', grad_norms[0], step)
         tb_logger.log_value('grad_norm_clipped', grad_norms_clipped[0], step)
