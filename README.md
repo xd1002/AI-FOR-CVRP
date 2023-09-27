@@ -1,2 +1,2 @@
 # AI-FOR-CVRP
-基于深度强化学习求解组合优化问题
+论文Cooperative Motion Planning for Persistent 3D Visual Coverage With Multiple Quadrotor UAVs的代码实现
