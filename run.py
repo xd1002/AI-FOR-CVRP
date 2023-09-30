@@ -20,6 +20,7 @@ from torch.utils.data import DataLoader
 from train import train_epoch, validate, get_inner_model
 from reinforce_baselines import NoBaseline, ExponentialBaseline, CriticBaseline, RolloutBaseline, WarmupBaseline
 from nets.attention_model import AttentionModel
+from nets.pointer_network import PointerNet
 
 from utils import torch_load_cpu, load_problem
 
@@ -54,23 +55,30 @@ def run(opts):
         # param dict
         load_data = torch_load_cpu(load_path)
 
-    model_class = {
+    '''model_class = {
         'attention': AttentionModel
     }.get(opts.model, None)
-    assert model_class is not None, "Unknown model: {}".format(model_class)
-    model = model_class(
-        opts.embedding_dim,
-        opts.hidden_dim,
-        problem,
-        n_encode_layers=opts.n_encode_layers,
-        mask_inner=True,
-        mask_logits=True,
-        normalization=opts.normalization,
-        tanh_clipping=opts.tanh_clipping,
-        checkpoint_encoder=opts.checkpoint_encoder,
-        shrink_size=opts.shrink_size,
-        n_agent=opts.n_agent
-    ).to(opts.device)
+    assert model_class is not None, "Unknown model: {}".format(model_class)'''
+    if opts.model == 'attention':
+        model = AttentionModel(
+            opts.embedding_dim,
+            opts.hidden_dim,
+            problem,
+            n_encode_layers=opts.n_encode_layers,
+            mask_inner=True,
+            mask_logits=True,
+            normalization=opts.normalization,
+            tanh_clipping=opts.tanh_clipping,
+            checkpoint_encoder=opts.checkpoint_encoder,
+            shrink_size=opts.shrink_size,
+            n_agent=opts.n_agent,
+            opts=opts
+        ).to(opts.device)
+    if opts.model == 'pointernet':
+        model = PointerNet(
+            problem,
+            opts
+        ).to(opts.device)
 
     # 是否有多个gpu供并行
     if opts.use_cuda and torch.cuda.device_count() > 1:

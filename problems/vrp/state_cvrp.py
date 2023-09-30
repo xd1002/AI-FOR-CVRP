@@ -172,7 +172,7 @@ class StateCVRP(NamedTuple):
         # batch_size x 1    (当前所在点)
         current_node = self.get_current_node()
         # batch_size x 1 x 3    (当前所在点的坐标)
-        current_node_coords = self.coords.gather(1, current_node[:, :, None].repeat(1, 1, 3))
+        current_node_coords = self.coords.gather(1, current_node[:, :, None].repeat(1, 1, opts.space_dim))
         # batch_size x graph_size+n_agent   (当前点到除了depot外其他所有点到距离)
         self.current_distance[:] = (self.coords[:, opts.n_depot:, :] - current_node_coords).norm(p=2, dim=-1)
         # batch_size x n_depot x graph_size+n_agent   (当前点到除了depot外其他所有点到距离+所有点到各个depot到距离)

@@ -201,7 +201,8 @@ class VRPDataset(Dataset):
             10: 20.,
             20: 3000.,
             50: 40.,
-            100: 50.
+            100: 50.,
+            size: 3000.
         }
         if filename is not None:
             if os.path.splitext(filename)[1] == '.pkl':
@@ -213,9 +214,9 @@ class VRPDataset(Dataset):
                 df = pd.read_csv(filename, header=None)
                 self.data = [
                     {
-                        'loc': torch.FloatTensor(df.iloc[opts.n_depot:, :3].values),
-                        'demand': torch.FloatTensor(df.iloc[opts.n_depot:, 3].values),
-                        'depot': torch.FloatTensor(df.iloc[:opts.n_depot, :3].values)
+                        'loc': torch.FloatTensor(df.iloc[opts.n_depot:, :opts.space_dim].values),
+                        'demand': torch.FloatTensor(df.iloc[opts.n_depot:, opts.space_dim].values),
+                        'depot': torch.FloatTensor(df.iloc[:opts.n_depot, :opts.space_dim].values)
                     }
                     for i in range(num_samples)
                 ]
@@ -229,9 +230,9 @@ class VRPDataset(Dataset):
 
             self.data = [
                 {
-                    'loc': torch.FloatTensor(size+opts.n_agent, 3).uniform_(0, 1),
+                    'loc': torch.FloatTensor(size+opts.n_agent, opts.space_dim).uniform_(0, 1),
                     'demand': (torch.FloatTensor(size+opts.n_agent).uniform_(0, 9).int() + 1).float() / CAPACITIES[size],
-                    'depot': torch.FloatTensor(opts.n_depot, 3).uniform_(0, 1)
+                    'depot': torch.FloatTensor(opts.n_depot, opts.space_dim).uniform_(0, 1)
                 }
                 for i in range(num_samples)
             ]

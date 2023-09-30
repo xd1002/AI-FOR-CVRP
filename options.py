@@ -9,6 +9,7 @@ def get_options(args=None):
         description="Attention based model for solving the Travelling Salesman Problem with Reinforcement Learning")
 
     # Data
+    parser.add_argument('--space_dim', type=int, default=2, help="coordinate dimension, 2 or 3")
     parser.add_argument('--problem', default='cvrp', help="The problem to solve, default 'tsp'")
     parser.add_argument('--graph_size', type=int, default=20, help="The size of the problem graph")
     parser.add_argument('--batch_size', type=int, default=128, help='Number of instances per batch during training')
@@ -17,6 +18,7 @@ def get_options(args=None):
                         help='Number of instances used for reporting validation performance')
 
     # Model
+    parser.add_argument('--gpu_idx', default='cuda_0', help="Specify gpu used to train the model")
     parser.add_argument('--model', default='attention', help="Model, 'attention' (default) or 'pointer'")
     parser.add_argument('--embedding_dim', type=int, default=128, help='Dimension of input embedding')
     parser.add_argument('--hidden_dim', type=int, default=128, help='Dimension of hidden layers in Enc/Dec')
@@ -27,6 +29,9 @@ def get_options(args=None):
                              'Set to 0 to not perform any clipping.')
     parser.add_argument('--normalization', default='batch', help="Normalization type, 'batch' (default) or 'instance'")
 
+    parser.add_argument('--n_layers', type=int, default=3, help='Number of layers in LSTM in PointerNet encoder')
+    parser.add_argument('--dropout', type=float, default=0.0, help="Dropout probability in PointerNet")
+    parser.add_argument('--bidir', type=bool, default=False, help="weather to use bidirectional LSTM")
     # Training
 
     parser.add_argument('--bp_one_path', type=bool, default=False, help="bp for one path")

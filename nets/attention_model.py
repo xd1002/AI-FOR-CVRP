@@ -55,7 +55,8 @@ class AttentionModel(nn.Module):
                  n_heads=8,
                  checkpoint_encoder=False,
                  shrink_size=None,
-                 n_agent=None):
+                 n_agent=None,
+                 opts=None):
         super(AttentionModel, self).__init__()
 
         self.embedding_dim = embedding_dim
@@ -88,10 +89,10 @@ class AttentionModel(nn.Module):
             if self.is_pctsp:
                 node_dim = 4  # x, y, expected_prize, penalty
             else:
-                node_dim = 4  # x, y, demand / prize
+                node_dim = opts.space_dim + 1  # x, y, demand / prize
 
             # Special embedding projection for depot node
-            self.init_embed_depot = nn.Linear(3, embedding_dim)
+            self.init_embed_depot = nn.Linear(opts.space_dim, embedding_dim)
             
             if self.is_vrp and self.allow_partial:  # Need to include the demand if split delivery allowed
                 self.project_node_step = nn.Linear(1, 3 * embedding_dim, bias=False)
