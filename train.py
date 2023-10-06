@@ -22,7 +22,7 @@ def get_inner_model(model):
     """
     return model.module if isinstance(model, DataParallel) else model
 
-def predict_path(model, dataset, opts):
+def predict_path(model, dataset, opts, save_result=False):
     set_decode_type(model, "greedy")
     def eval_model_bat(bat):
         with torch.no_grad():
@@ -40,11 +40,12 @@ def predict_path(model, dataset, opts):
             agent_all = torch.cat([agent_all, agent_all_], 1)
     pi, agent_all = pi.numpy(), agent_all.numpy()
 
-    if not os.path.exists(opts.test_absolute_dir):
-        os.makedirs(opts.test_absolute_dir)
+    if save_result:
+        if not os.path.exists(opts.test_absolute_dir):
+            os.makedirs(opts.test_absolute_dir)
 
-    np.savetxt('{}\\routine.csv'.format(opts.test_absolute_dir), pi, delimiter=',')
-    np.savetxt('{}\\agent_all.csv'.format(opts.test_absolute_dir), agent_all, delimiter=',')
+        np.savetxt('{}\\routine.csv'.format(opts.test_absolute_dir), pi, delimiter=',')
+        np.savetxt('{}\\agent_all.csv'.format(opts.test_absolute_dir), agent_all, delimiter=',')
     avg_cost = cost.mean()
     print('Validation overall avg_cost: {} +- {}'.format(
         avg_cost, torch.std(cost) / math.sqrt(len(cost))))
@@ -170,7 +171,8 @@ def train_epoch(model, optimizer, baseline, lr_scheduler, epoch, val_dataset, pr
     epoch_duration = time.time() - start_time
     print("Finished epoch {}, took {} s".format(epoch, time.strftime('%H:%M:%S', time.gmtime(epoch_duration))))
 
-    if (opts.checkpoint_epochs != 0 and epoch % opts.checkpoint_epochs == 0) or epoch == opts.n_epochs - 1:
+    if epoch != 0 and ((opts.checkpoint_epochs != 0 and epoch % opts.checkpoint_epochs == 0) or \
+            (opts.n_epochs - opts.record_epoch >= 1 and epoch >= opts.record_epoch)):
         print('Saving model and state...')
         torch.save(
             {

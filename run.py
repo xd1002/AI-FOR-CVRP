@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import sys
-sys.path.append('/home/work/风行电力交易/elec_trade/xd_test/other_file/MDAM-retry')
+sys.path.append('C:\\Users\\xd1002\\Desktop\\AI-FOR-CVRP')
 import os
 import json
 import copy
@@ -55,30 +55,15 @@ def run(opts):
         # param dict
         load_data = torch_load_cpu(load_path)
 
-    '''model_class = {
-        'attention': AttentionModel
+    model_class = {
+        'attention': AttentionModel,
+        'pointernet': PointerNet
     }.get(opts.model, None)
-    assert model_class is not None, "Unknown model: {}".format(model_class)'''
-    if opts.model == 'attention':
-        model = AttentionModel(
-            opts.embedding_dim,
-            opts.hidden_dim,
-            problem,
-            n_encode_layers=opts.n_encode_layers,
-            mask_inner=True,
-            mask_logits=True,
-            normalization=opts.normalization,
-            tanh_clipping=opts.tanh_clipping,
-            checkpoint_encoder=opts.checkpoint_encoder,
-            shrink_size=opts.shrink_size,
-            n_agent=opts.n_agent,
-            opts=opts
-        ).to(opts.device)
-    if opts.model == 'pointernet':
-        model = PointerNet(
-            problem,
-            opts
-        ).to(opts.device)
+    assert model_class is not None, "Unknown model: {}".format(model_class)
+    model = model_class(
+        problem,
+        opts
+    ).to(opts.device)
 
     # 是否有多个gpu供并行
     if opts.use_cuda and torch.cuda.device_count() > 1:

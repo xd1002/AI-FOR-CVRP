@@ -2,7 +2,7 @@ import os
 import time
 import argparse
 import torch
-
+import pprint as pp
 
 def get_options(args=None):
     parser = argparse.ArgumentParser(
@@ -24,10 +24,14 @@ def get_options(args=None):
     parser.add_argument('--hidden_dim', type=int, default=128, help='Dimension of hidden layers in Enc/Dec')
     parser.add_argument('--n_encode_layers', type=int, default=3,
                         help='Number of layers in the encoder/critic network')
+    parser.add_argument('--n_heads', type=int, default=8,
+                        help='number of heads in MHA')
     parser.add_argument('--tanh_clipping', type=float, default=10.,
                         help='Clip the parameters to within +- this value using tanh. '
                              'Set to 0 to not perform any clipping.')
     parser.add_argument('--normalization', default='batch', help="Normalization type, 'batch' (default) or 'instance'")
+    parser.add_argument('--mask_inner', type=bool, default=True, help="Mask inner")
+    parser.add_argument('--mask_logits', type=bool, default=True, help="Mask logits")
 
     parser.add_argument('--n_layers', type=int, default=3, help='Number of layers in LSTM in PointerNet encoder')
     parser.add_argument('--dropout', type=float, default=0.0, help="Dropout probability in PointerNet")
@@ -39,8 +43,6 @@ def get_options(args=None):
     parser.add_argument('--lr_model', type=float, default=0.0001, help="Set the learning rate for the actor network")
     parser.add_argument('--lr_critic', type=float, default=1e-4, help="Set the learning rate for the critic network")
     parser.add_argument('--lr_decay', type=float, default=1, help='Learning rate decay per epoch')
-    # , action = 'store_true'
-
 
     parser.add_argument('--n_epochs', type=int, default=50, help='The number of epochs to train')
     parser.add_argument('--seed', type=int, default=1234, help='Random seed to use')
@@ -74,7 +76,9 @@ def get_options(args=None):
                         help='Start at epoch # (relevant for learning rate decay)')
     parser.add_argument('--checkpoint_epochs', type=int, default=1,
                         help='Save checkpoint every n epochs (default 1), 0 to save no checkpoints')
-    # 'D:\\xd\\project\\Combinatorial-Optimization-and-Artificial-Intelligence\\MDAM-master\\MDAM-master-to-3d\\outputs\\cvrp_20\\run_20221027T191136\\epoch-99.pt',
+    parser.add_argument('--record_epoch', type=int, default=1,
+                        help='Save checkpoint every n epochs (default 1), 0 to save no checkpoints')
+
     parser.add_argument('--resume', help='Resume from previous checkpoint file')
     parser.add_argument('--no_tensorboard', action='store_true', help='Disable logging TensorBoard files')
     parser.add_argument('--no_progress_bar', action='store_true', help='Disable progress bar')
@@ -90,26 +94,26 @@ def get_options(args=None):
                                                                       'precision of single-precision floating-point '
                                                                       'numbers')
 
-    '''# test_only
-    parser.add_argument('--eval_only', type=bool, default=True, help='Set this value to only evaluate model')
-    parser.add_argument('--eval_batch_size', type=int, default=1,
-                        help="Batch size to use during (baseline) evaluation")
-    parser.add_argument('--load_path', default='E:\\xd\\project\\use_drl_to_solve_vrp\\MDAM-master\\MDAM-master-to-multi-depot0-unbalance\\data\\epoch-199.pt',
-                        help='Path to load model parameters and optimizer state from')
-    parser.add_argument('--test_only', type=bool, default=True, help='whether to test the pretrained model')
-    parser.add_argument('--val_dataset', type=str, default='data/test_data.pkl', help='Dataset file to use for validation')'''
-
-
     # train_only
     parser.add_argument('--test_only', action='store_false', help='whether to test the pretrained model')
     parser.add_argument('--eval_only', type=bool, default=False, help='Set this value to only evaluate model')
     parser.add_argument('--eval_batch_size', type=int, default=1024,
                         help="Batch size to use during (baseline) evaluation")
     parser.add_argument('--load_path', default=None, help='Path to load model parameters and optimizer state from')
-    #parser.add_argument('--load_path', default='D:\\xd\\project\\Combinatorial-Optimization-and-Artificial-Intelligence\\MDAM-master\\MDAM-master-to-3d-0\\outputs\\cvrp_30\\run_20221110T222210\\epoch-99.pt',help='Path to load model parameters and optimizer state from')
     parser.add_argument('--val_dataset', type=str, default=None, help='Dataset file to use for validation')
-    #'''
+
     opts = parser.parse_args(args)
+
+    default_opts = vars(parser.parse_args([]))
+    different_keys = []
+    current_opts = vars(opts)
+    for key in default_opts:
+        if key in current_opts and current_opts[key] != default_opts[key]:
+            different_keys.append(key)
+    output_string = ""
+    for key in different_keys:
+        output_string += "--" + key + " " + str(current_opts[key]) + " "
+    pp.pprint(output_string.strip())
 
     opts.use_cuda = torch.cuda.is_available() and not opts.no_cuda
     opts.run_name = "{}_{}".format(opts.run_name, time.strftime("%Y%m%dT%H%M%S"))

@@ -1,0 +1,1 @@
+python evaluate.py --load_path tests/cvrp_43/run_20231006T193431/ --val_size 1280 --eval_batch_size 128 --graph_size 43 --n_encode_layer 1 --embedding_dim 128 --hidden_dim 128 --model pointernet --n_epochs 25 --record_epoch 20

@@ -114,10 +114,9 @@ class Attention(nn.Module):
         self.V = Parameter(torch.FloatTensor(hidden_dim), requires_grad=True)
         self._inf = Parameter(torch.FloatTensor([float('-inf')]), requires_grad=False)
         self.tanh = nn.Tanh()
-        self.softmax = nn.Softmax()
 
         # Initialize vector V
-        nn.init.uniform(self.V, -1, 1)
+        nn.init.uniform_(self.V, -1, 1)
 
     def forward(self, input,
                 context,
@@ -146,7 +145,7 @@ class Attention(nn.Module):
         att = torch.bmm(V, self.tanh(inp + ctx)).squeeze(1)
         mask = mask[:, 0, :]
         att[mask] = -math.inf
-        alpha = self.softmax(att)
+        alpha = F.softmax(att, dim=-1)
         log_p = F.log_softmax(att, dim=-1)
         # batch_size x hidden_dim
         hidden_state = torch.bmm(ctx, alpha.unsqueeze(2)).squeeze(2)
@@ -389,21 +388,21 @@ class PointerNet(nn.Module):
         # batch_size x hidden_dim
         input, forget, cell, out = gates.chunk(4, 1)
 
-        input = F.sigmoid(input)
-        forget = F.sigmoid(forget)
-        cell = F.tanh(cell)
-        out = F.sigmoid(out)
+        input = torch.sigmoid(input)
+        forget = torch.sigmoid(forget)
+        cell = torch.tanh(cell)
+        out = torch.sigmoid(out)
 
         # batch_size x hidden_dim
         c_t = (forget * c) + (input * cell)
         # batch_size x hidden_dim
-        h_t = out * F.tanh(c_t)
+        h_t = out * torch.tanh(c_t)
 
 
         mask = state.get_mask(opts) 
         # Attention section
         hidden_t, _, log_p = self.att(h_t, context, torch.eq(mask, 1))
-        hidden_t = F.tanh(self.hidden_out(torch.cat((hidden_t, h_t), 1)))
+        hidden_t = torch.tanh(self.hidden_out(torch.cat((hidden_t, h_t), 1)))
         # mask: batch_size x 1 x graph_size+n_depot+n_agent    (1表示要被mask的，0表示正常的点，已经访问过的和)
         
         assert not torch.isnan(log_p).any()
