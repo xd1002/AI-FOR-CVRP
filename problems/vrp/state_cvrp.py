@@ -24,6 +24,8 @@ class StateCVRP(NamedTuple):
     current_distance: torch.Tensor
     mask_depot: torch.Tensor
     VEHICLE_CAPACITY = 1.0  # Hardcoded
+    VELOCITY = []
+    ACCELERATION = []
 
     @property
     def visited(self):
