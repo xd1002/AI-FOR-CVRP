@@ -23,7 +23,7 @@ def get_inner_model(model):
     return model.module if isinstance(model, DataParallel) else model
 
 def predict_path(model, dataset, opts, save_result=False):
-    set_decode_type(model, "greedy")
+    set_decode_type(model, "beam")
     def eval_model_bat(bat):
         with torch.no_grad():
             cost, pi, agent_all = model(bat, opts=opts, return_pi=True)

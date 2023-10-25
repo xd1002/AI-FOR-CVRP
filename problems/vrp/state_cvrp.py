@@ -23,6 +23,12 @@ class StateCVRP(NamedTuple):
     agent_prev_a: torch.Tensor
     current_distance: torch.Tensor
     mask_depot: torch.Tensor
+    beam_agent_length: torch.Tensor
+    beam_agent_used_capacity: torch.Tensor
+    beam_agent_prev_a: torch.Tensor
+    beam_visited_: torch.Tensor
+    beam_p: torch.Tensor
+    beam_current_coords: torch.Tensor
     VEHICLE_CAPACITY = 1.0  # Hardcoded
 
     @property
@@ -62,8 +68,10 @@ class StateCVRP(NamedTuple):
         batch_size, n_loc, _ = loc.size()
         # batch_size x 1 x graph_size+n_agent+n_depot
         visited_ = torch.zeros(batch_size, 1, n_loc + opts.n_depot, dtype=torch.uint8, device=loc.device)
+        beam_visited_ = torch.zeros(batch_size, opts.beam_size, 1, n_loc + opts.n_depot, dtype=torch.uint8, device=loc.device)
         # 开始点mask掉
         visited_[:, :, opts.n_depot:opts.n_depot+opts.n_agent] = 1
+        beam_visited_[:, :, :, opts.n_depot:opts.n_depot + opts.n_agent] = 1
         return StateCVRP(
             coords=torch.cat((depot, loc), -2),  # batch_size x graph_size+n_depot+n_agent x 3  (坐标，起点+depot+访问点)
             demand=demand,  # batch_size x graph_size+n_agent   (demand，起点+访问点)
@@ -76,13 +84,21 @@ class StateCVRP(NamedTuple):
                 else torch.zeros(batch_size, 1, (n_loc + 63) // 64, dtype=torch.int64, device=loc.device)  
             ),
             lengths=torch.zeros(batch_size, 1, device=loc.device),
-            cur_coord=input['loc'][:, opts.n_depot:opts.n_depot+opts.n_agent, :],  
-            i=torch.zeros(1, dtype=torch.int64, device=loc.device),  
+            cur_coord=input['loc'][:, opts.n_depot:opts.n_depot+opts.n_agent, :],
+            current_distance=loc.new_zeros(demand.shape),
+            mask_depot=torch.zeros(batch_size, depot.shape[1], dtype=torch.bool, device=loc.device),
+            i=torch.zeros(1, dtype=torch.int64, device=loc.device),
             agent_length=torch.zeros((batch_size, opts.n_agent), device=loc.device),
             agent_used_capacity=demand.new_zeros(batch_size, opts.n_agent),
             agent_prev_a=torch.arange(opts.n_agent, dtype=torch.int64, device=loc.device).view(1, -1).repeat(batch_size, 1) + opts.n_depot,  # 每个agent的当前所在点
-            current_distance=loc.new_zeros(demand.shape),
-            mask_depot=torch.zeros(batch_size, depot.shape[1], dtype=torch.bool, device=loc.device)
+
+            beam_current_coords=input['loc'][:, opts.n_depot:opts.n_depot+opts.n_agent, :].unsqueeze(1).repeat(1, opts.beam_size, 1, 1),
+            beam_agent_length=torch.zeros((batch_size, opts.beam_size, opts.n_agent), device=loc.device),
+            beam_agent_used_capacity=demand.new_zeros(batch_size, opts.beam_size, opts.n_agent),
+            beam_agent_prev_a=torch.arange(opts.n_agent, dtype=torch.int64, device=loc.device).unsqueeze(0).unsqueeze(0).repeat(batch_size, opts.beam_size, 1) + opts.n_depot,
+            beam_visited_=beam_visited_,
+            beam_p=torch.zeros((batch_size, opts.beam_size), device=loc.device),
+
         )
 
     def get_final_cost(self):
@@ -121,8 +137,7 @@ class StateCVRP(NamedTuple):
         # selected_demand = self.demand.gather(-1, torch.clamp(prev_a - 1, 0, n_loc - 1))
         # 这个torch.clamp(prev_a - 1, 0, n_loc - 1)是干啥的
         current_used_capacity = self.agent_used_capacity.gather(1, current_agent.view(-1, 1))
-        selected_demand = self.demand[self.ids, torch.clamp(prev_a - opts.n_depot, 0, n_loc - 1)]
-        used_capacity = (current_used_capacity + selected_demand + selected_distance * opts.dist_coef)
+        used_capacity = (current_used_capacity + selected_distance * opts.dist_coef)
         for i in range(opts.n_depot):
             used_capacity = used_capacity * (prev_a != i).float()
         agent_used_capacity = self.agent_used_capacity.scatter(-1, current_agent.view(-1, 1), used_capacity)
@@ -140,6 +155,67 @@ class StateCVRP(NamedTuple):
         return self._replace(
             agent_prev_a=agent_prev_a, agent_used_capacity=agent_used_capacity, visited_=visited_,
             agent_length=agent_length, cur_coord=cur_coord, i=self.i + 1
+        )
+
+    def update_beam(self, selected, topk_beams, current_agent, opts):
+        """
+        selected: batch_size x beam_size x 1
+        topk_beams: batch_size x beam_size
+        current_agent: batch_size x beam_size
+        """
+
+        assert self.i.size(0) == 1, "Can only update if state represents single step"
+
+        # batch_size x beam_size x 1
+        prev_a = selected
+        batch_size = prev_a.shape[0]
+        topk_beams = topk_beams.type(torch.int64)
+
+        # batch_size x beam_size x n_agent
+        beam_agent_prev_a = self.beam_agent_prev_a.scatter(-1, current_agent.unsqueeze(-1), prev_a)
+        # batch_size x beam_size x 1 x 3
+        beam_cur_coord = self.coords.unsqueeze(1).repeat(1, opts.beam_size, 1, 1).gather(2, selected.unsqueeze(-1).repeat(1, 1, 1, opts.space_dim))
+        # batch_size x beam_size x n_agent
+        beam_agent_length = self.beam_agent_length.gather(1, topk_beams.unsqueeze(-1).repeat(1, 1, opts.n_agent))
+        # batch_size x beam_size x 1
+        beam_agent_length = beam_agent_length.gather(2, current_agent.unsqueeze(-1))
+        # batch_size x beam_size x n_agent
+        selected_prev = self.beam_agent_prev_a.gather(1, topk_beams.unsqueeze(-1).repeat(1, 1, opts.n_agent))
+        # batch_size x beam_size x 1
+        selected_prev = selected_prev.gather(2, current_agent.unsqueeze(-1))
+        # batch_size x beam_size x 1 x 3
+        prev_coord = self.coords.unsqueeze(1).repeat(1, opts.beam_size, 1, 1).gather(2, selected_prev.unsqueeze(-1).repeat(1, 1, 1, opts.space_dim))
+        # batch_size x beam_size x 1
+        selected_distance = (beam_cur_coord - prev_coord).norm(p=2, dim=-1)
+        # batch_size x beam_size x 1 x graph_size+n_agent+n_depot
+        beam_visited_ = self.beam_visited_.gather(1, topk_beams.view(batch_size, -1, 1, 1).repeat(1, 1, 1, self.beam_visited_.shape[-1]))
+        # batch_size x beam_size x 1
+        lengths = beam_agent_length + selected_distance * (1 - self.beam_visited_[:, :, :, opts.n_depot:].all(axis=-1))
+        # batch_size x beam_size x n_agent
+        beam_agent_length = self.beam_agent_length.scatter(-1, current_agent.unsqueeze(-1), lengths)
+
+        # batch_size x beam_size x n_agent
+        beam_current_used_capacity = self.beam_agent_used_capacity.gather(1, topk_beams.unsqueeze(-1).repeat(1, 1, opts.n_agent))
+        # batch_size x beam_size x 1
+        beam_current_used_capacity = beam_current_used_capacity.gather(2, current_agent.unsqueeze(-1))
+        used_capacity = (beam_current_used_capacity + selected_distance * opts.dist_coef)
+        for i in range(opts.n_depot):
+            used_capacity = used_capacity * (prev_a != i).float()
+        beam_agent_used_capacity = self.beam_agent_used_capacity.scatter(-1, current_agent.unsqueeze(-1), used_capacity)
+
+        if self.visited_.dtype == torch.uint8:
+            # Note: here we do not subtract one as we have to scatter so the first column allows scattering depot
+            # Add one dimension since we write a single value
+            # prev_a[:, :, None]: batch_size x 1 x 1
+            # 按照prev_a的元素来，prev_a中[x, z, y]位置处的元素为k，则将1填入self.visited_的[x, y, k]处
+            beam_visited_ = beam_visited_.scatter(-1, prev_a.unsqueeze(-1), 1)
+        else:
+            # This works, will not set anything if prev_a -1 == -1 (depot)
+            visited_ = mask_long_scatter(self.visited_, prev_a - 1)
+
+        return self._replace(
+            beam_agent_prev_a=beam_agent_prev_a, beam_agent_used_capacity=beam_agent_used_capacity, beam_visited_=beam_visited_,
+            beam_agent_length=beam_agent_length, beam_current_coords=beam_cur_coord, i=self.i + 1
         )
 
     def all_finished(self, opts):
@@ -182,7 +258,7 @@ class StateCVRP(NamedTuple):
                           self.coords[:, :opts.n_depot, :].unsqueeze(2)).norm(p=2, dim=-1)
         # batch_size x n_depot x graph_size+n_agent   (当前demand包含下一个点的demand+到下一个点和下一个点到depot的总损失电量, 即考虑未来信息)
         # TODO: demand更新的时候有没有将future_distance算入
-        current_demand = self.demand.unsqueeze(1).repeat(1, opts.n_depot, 1) + future_distance * opts.dist_coef
+        current_demand = future_distance * opts.dist_coef
         # batch_size x 1 x graph_size+n_agent   (mask掉之前已经访问的和当前到不了的)
         mask_loc = (
             visited_loc |

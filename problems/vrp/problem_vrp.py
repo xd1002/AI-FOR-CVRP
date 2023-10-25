@@ -77,6 +77,60 @@ class CVRP(object):
         return state.agent_length.sum(axis=-1), None
 
     @staticmethod
+    def beam_get_costs(dataset, pi, agent_all, n_agent, state, opts):
+        '''
+        验证除了depot外的每个点被访问且仅被访问一次，验证在结束前车没有超过capacity，
+        '''
+        # dataset: 那个dict类型的input
+        batch_size, graph_size = dataset['demand'].size()
+        # Check that tours are valid, i.e. contain 0 to n -1
+        # 每个batch每步选点的index
+        # raw data: [1, 0, 2, 1, 0, 2]
+        # value: [0, 0, 1, 1, 2, 2]
+        # index: [1, 4, 0, 3, 2, 5]
+        # 输出是每个batch排序后的value（不是index）
+        # batch_size x len(sequence)
+        sorted_pi = pi.data.sort(-1)[0]
+        # Sorting it should give all zeros at front and then 1...n
+        # 要求pi中1~20出现且仅出现一次（上面pi在sort完后与一个标准数组进行比较，正确情况应该是pi的[i, -graph_size:]为1,...,20），
+        # 同时其余的都是0(pi在sort后[i, :-graph_size])全是0
+        assert (
+                       torch.arange(opts.n_depot + opts.n_agent, graph_size + opts.n_depot, out=pi.data.new()).view(1, 1, -1).expand(
+                           batch_size, opts.beam_size, graph_size - opts.n_agent) ==
+                       sorted_pi[:, -graph_size + opts.n_agent:]
+               ).all() and (sorted_pi[:, :, :-graph_size + opts.n_agent] < opts.n_depot).all(), "Invalid tour"
+
+        # Visiting depot resets capacity so we add demand = -capacity (we make sure it does not become negative)
+        # axis=1:其余index分量不变，变第二维的分量，如a.shape=(10,2),b.shape=(10,3),torch.cat((a,b),axis=1)开一个新tensor，
+        # [:,0:2]放a,[:,0+2:3+2]放b
+        # batch_size x graph_size+1 , 在原来的input['demand']后面加上有关depot的demand(新的tensor)
+        # batch_size x len(sequence)
+        # d中元素[i, j]表示第i个batch对应的点pi[i, j]的demand d[i, j]
+        # 这个不是前面sort过的而是打乱顺序的
+        # batch_size
+        '''used_cap = torch.zeros(pi.shape[0], opts.beam_size, n_agent, device=opts.device)
+        # 看每一步的demand是否满足要求
+        for i in range(pi.size(2)):
+            cur_cap = used_cap.gather(2, agent_all[:, :, i].view(-1, 1, 1))
+            cur_cap += d[:, i][:, None]  # This will reset/make capacity negative if i == 0, e.g. depot visited
+            # Cannot use less than 0
+            used_cap = used_cap.scatter(1, agent_all[:, i].view(-1, 1), cur_cap)
+            used_cap[used_cap < 0] = 0
+            assert (used_cap <= CVRP.VEHICLE_CAPACITY + 1e-5).all(), "Used more than capacity"'''
+
+        # Gather dataset in order of tour
+        # batch_size x graph_size+1 x 2：包括depot在内每个点的坐标（第一个是depot，然后是其余目标点）
+        # loc_with_depot = torch.cat((dataset['depot'][:, None, :], dataset['loc']), 1)
+        # 每个batch的每个step的点的坐标选出来
+        # batch_size x len(sequence) x 2
+        # d = loc_with_depot.gather(1, pi[..., None].expand(*pi.size(), loc_with_depot.size(-1)))
+
+        # Length is distance (L2-norm of difference) of each next location to its prev and of first and last to depot
+        # batch_size, 每个batch_size的reward：路径长度（后面两个加法项：第一个是因为pi的index是从离开depot的第一个点开始的，
+        # 相当于少加了第一段路的长度；第二个：本来pi的第二维就由）
+        return state.beam_agent_length.sum(axis=-1), None
+
+    @staticmethod
     def make_dataset(*args, **kwargs):
         return VRPDataset(*args, **kwargs)
 

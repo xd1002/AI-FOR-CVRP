@@ -1,4 +1,5 @@
 import torch
+import logging
 from torch import nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
@@ -41,18 +42,18 @@ class AttentionModelFixed(NamedTuple):
         )
 
 
-class AttentionModel(nn.Module):
+class AttentionModelBeamSearch(nn.Module):
 
     def __init__(self,
                  problem,
                  opts=None):
-        super(AttentionModel, self).__init__()
+        super(AttentionModelBeamSearch, self).__init__()
 
         self.embedding_dim = opts.embedding_dim
         self.hidden_dim = opts.hidden_dim
         self.n_encode_layers = opts.n_encode_layers
         self.decode_type = None
-        self.temp = 1.0
+        self.temp = 100
         self.is_tsp = problem.NAME == 'tsp'
         self.allow_partial = problem.NAME == 'sdvrp'
         self.is_vrp = problem.NAME == 'cvrp' or problem.NAME == 'sdvrp'
@@ -132,7 +133,6 @@ class AttentionModel(nn.Module):
         #              'demand': tensor.shape = (batch_size, graph_size+n_agent),
         #              'depot': tensor.shape = (batch_size, n_depot)}
         states = self.problem.make_state(input, opts=opts)
-        output, sequence, agent = [], [], []
 
         # self._init_embed(input): batch_size x n_depot+graph_size+n_agent x embedding_dim  (图信息的初始embedding)
         # embeddings: batch_size x n_depot+graph_size+n_agent x embed_dim   (图信息的最终embedding)
@@ -141,7 +141,7 @@ class AttentionModel(nn.Module):
         # v: n_heads x batch_size*(n_depot+n_agent+graph_size) x val_dim    (QKV中的V)
         # h_old: batch_size x n_depot+graph_size+n_agent x embedding_dim    (原始transformer的encoder输出)
         embeddings, init_context, attn, V, h_old = self.embedder(self._init_embed(input))
-        
+        beam_p, beam_seq, beam_agent_ = None, None, None
         # fixed = AttentionModelFixed(embeddings, fixed_context, *fixed_attention_node_data)
         # embeddings: batch_size x n_depot+graph_size+n_agent x embed_dim   (图信息的最终embedding)
         # fixed context = (batch_size, 1, embed_dim), 对embeddings的第二维求平均后经过一个nn.Linear后再拓展成三维
@@ -151,43 +151,119 @@ class AttentionModel(nn.Module):
         fixed = self._precompute(embeddings)
         j = 0
 
-        # batch_size: 当前时间步是哪个agent, 从agent0开始, 或说是上一时刻的agent
-        current_agent = torch.zeros(states.agent_length.shape[0], dtype=torch.int64, device=states.agent_length.device)
+        # batch_size x beam_size: 当前时间步是哪个agent, 从agent0开始, 或说是上一时刻的agent
+        current_agent = torch.zeros(states.beam_agent_length.shape[0], opts.beam_size, dtype=torch.int64, device=states.agent_length.device)
         # shrink_size: 在state要结束的时候对batchs_size进行shrink，options里面设置
         # shrink_size不是None或当前path的state还没结束
         while not (self.shrink_size is None and states.all_finished(opts)):
-            # batch_size x 1    (当前agent的已行进路径长)
-            current_length = states.agent_length.gather(1, current_agent[:, None])
-            # batch_size    (如果当前agent路径长超过了阈值就)
-            current_agent = torch.where(current_length.squeeze(1) < opts.mean_distance,
-                                        current_agent, torch.clamp(current_agent+1, 0, opts.n_agent-1))
-            agent.append(current_agent)
-            states = states._replace(prev_a=states.agent_prev_a.gather(1, current_agent[:, None]),
-                                     used_capacity=states.agent_used_capacity.gather(1, current_agent[:, None]))
+            if j == 0:
+                # batch_size x 1    (当前agent的已行进路径长)
+                current_length = states.agent_length.gather(1, current_agent[:, 0, None])
+                # batch_size    (如果当前agent路径长超过了阈值就)
+                current_agent = torch.where(current_length.squeeze(1) < opts.mean_distance, current_agent[:, 0], torch.clamp(current_agent[:, 0] + 1, 0, opts.n_agent - 1))
+                # batch_size x beam_size x 1
+                beam_agent_ = current_agent.unsqueeze(1).repeat(1, opts.beam_size).unsqueeze(2)
+                states = states._replace(prev_a=states.agent_prev_a.gather(1, current_agent[:, None]),
+                                         used_capacity=states.agent_used_capacity.gather(1, current_agent[:, None]))
+
+                # log_p: batch_size x 1 x graph_size+n_depot+n_agent  (每个点被选择的概率)
+                # mask: batch_size x 1 x graph_size+n_depot+n_agent
+                log_p, mask = self._get_log_p(fixed, states, opts)
+
+                # beam_prob: batch_size x beam_size
+                # selected: batch_size x beam_size，每个batch的graph被选中的点的index
+                beam_probs, selected = self._select_node(log_p.exp()[:, 0, :], mask[:, 0, :])
+                # batch_size x beam_size
+                beam_p = beam_probs
+                # batch_size x beam_size x 1
+                beam_seq = selected.unsqueeze(-1)
+                topk_node = beam_seq
+                topk_beams = torch.zeros((topk_node.shape[0], opts.beam_size), device=topk_node.device)
+
+            else:
+                agent_per_beam = []
+                selected_per_beam = []
+                probs_per_beam = []
+                beam_per_select = []
+                for beam in range(opts.beam_size):
+                    # batch_size x 1    (当前agent的已行进路径长)
+                    current_length = states.beam_agent_length[:, beam, -1:].gather(1, beam_agent_[:, beam, -1:])
+                    # batch_size x 1    (如果当前agent路径长超过了阈值就)
+                    beam_agent = torch.where(current_length.squeeze(1) < opts.mean_distance,
+                                             beam_agent_[:, beam, -1],
+                                             torch.clamp(beam_agent_[:, beam, -1]+1, 0, opts.n_agent-1)).unsqueeze(1)
+                    agent_per_beam.append(beam_agent)
+                    states = states._replace(prev_a=states.beam_agent_prev_a[:, beam].gather(1, beam_agent),
+                                             used_capacity=states.beam_agent_used_capacity[:, beam].gather(1, beam_agent),
+                                             visited_=states.beam_visited_[:, beam])
+                    log_p, mask = self._get_log_p(fixed, states, opts)
+                    # beam_probs: batch_size x beam_size
+                    # selected: batch_size x beam_size，每个batch的graph被选中的点的index
+                    beam_probs, selected = self._select_node(log_p.exp()[:, 0, :], mask[:, 0, :])
+                    selected_per_beam.append(selected)
+                    probs_per_beam.append(beam_probs)
+                    agent_per_beam.append(beam_agent)
+                    beam_per_select.append(torch.zeros_like(selected, device=selected.device)+beam)
+
+                # batch_size x beam_size*beam_size
+                beam_per_select = torch.cat(beam_per_select, 1)
+                # batch_size x beam_size
+                agent_per_beam = torch.cat(agent_per_beam, 1)
+                print("current step:")
+                print(j)
+                print("current probs:")
+                print(probs_per_beam)
+                for beam in range(opts.beam_size):
+                    # batch_size x beam_size
+                    probs_per_beam[beam] += beam_p[:, beam].unsqueeze(-1)
+                # batch_size x beam_size*beam_size
+                probs_per_beam = torch.cat(probs_per_beam, 1)
+                # batch_size x beam_size*beam_size
+                selected_per_beam = torch.cat(selected_per_beam, 1)
+                # batch_size x beam_size
+                beam_p, topk_node = torch.topk(probs_per_beam, opts.beam_size, 1)
+                print("cum probs:")
+                print(beam_p)
+                # batch_size x beam_size
+                topk_beams = beam_per_select.gather(1, topk_node)
+                print("topk beams:")
+                print(topk_beams)
+                # batch_size x beam_size x seq_length
+                beam_seq = beam_seq.gather(1, topk_beams.unsqueeze(-1).repeat(1, 1, beam_seq.shape[-1]))
+                # batch_size x beam_size x 1
+                topk_node = selected_per_beam.gather(1, topk_node).unsqueeze(-1)
+                # batch_size x beam_size x seq_length+1
+                beam_seq = torch.cat([beam_seq, topk_node], 2)
+                dist_matrix = torch.cdist(states.coords, states.coords)
+                dist_matrix = dist_matrix.gather(1, topk_node.repeat(1, 1, dist_matrix.shape[1]))
+                print("nearest nodes:")
+                print(torch.topk(dist_matrix, 4, -1, largest=False)[1])
+                # batch_size x beam_size x seq_length
+                beam_agent_ = beam_agent_.gather(1, topk_beams.unsqueeze(-1).repeat(1, 1, beam_agent_.shape[-1]))
+                # batch_size x beam_size x 1
+                agent_per_beam = agent_per_beam.gather(1, topk_beams).unsqueeze(2)
+                # batch_size x beam_size x seq_length+1
+                beam_agent_ = torch.cat([beam_agent_, agent_per_beam], 2)
+                print("current sequence:")
+                print(beam_seq)
 
 
-            # log_p: batch_size x 1 x graph_size+n_depot+n_agent  (每个点被选择的概率)
-            # mask: batch_size x 1 x graph_size+n_depot+n_agent
-            log_p, mask = self._get_log_p(fixed, states, opts)
-            
-            # selected: batch_size，每个batch的graph被选中的点的index
-            selected = self._select_node(log_p.exp()[:, 0, :], mask[:, 0, :]) 
-            
-            states = states.update(selected, current_agent, opts)
-            
-            output.append(log_p[:, 0, :])
-            sequence.append(selected)
+
+            states = states.update_beam(topk_node,
+                                        topk_beams,
+                                        beam_agent_[:, :, -1],
+                                        opts)
 
             j += 1
-        # batch_size x len(output)=len(sequence) x graph_size+n_depot+n_agent
-        _log_p = torch.stack(output, 1)
-        # batch_size x len(sequence)=len(output)
-        pi = torch.stack(sequence, 1)
-        agent_all = torch.stack(agent, 1)
+        # batch_size x beam_size
+        _log_p = beam_p
+        # batch_size x beam_size x len(sequence)=len(output)
+        pi = beam_seq
+        agent_all = beam_agent_
 
         # cost: batch_size
         # mask: None
-        cost, mask = self.problem.get_costs(input, pi, agent_all, self.n_agent, states, opts)
+        cost, mask = self.problem.beam_get_costs(input, pi, agent_all, self.n_agent, states, opts)
 
         if return_pi:
             return cost, pi, agent_all
@@ -308,7 +384,6 @@ class AttentionModel(nn.Module):
         assert (probs == probs).all(), "Probs should not contain any nans"
 
         if self.decode_type == "greedy":
-            
             # 但这个应该不会取到被mask的元素，因为log_p（即probs）本身是经过mask的，被mask的元素极小不可能被取到
             # _: 每个batch的最大值，batch_size
             # selected: 每个batch对应最大值的index，batch_size
@@ -326,7 +401,19 @@ class AttentionModel(nn.Module):
             while mask.gather(1, selected.unsqueeze(-1)).data.any():
                 print('Sampled bad values, resampling!')
                 selected = probs.multinomial(1).squeeze(1)
-
+        elif self.decode_type == "beam":
+            # selected[0]: topk probs
+            # selected[1]: topk index
+            selected = torch.topk(probs, 3, 1)
+            '''if mask.gather(1, selected[1]).data.any():
+                for i in range(mask.gather(1, selected[1]).shape[0]):
+                    if mask.gather(1, selected[1])[i].data.any():
+                        print(i, selected[1][i], probs[i], mask[i])
+                        break'''
+            while mask.gather(1, selected[1]).data.any():
+                selected = (selected[0][:, :-1], selected[1][:, :-1])
+            assert selected[0].shape[1]
+            assert not mask.gather(1, selected[1]).data.any(), "Decode greedy: infeasible action has maximum probability"
         else:
             assert False, "Unknown decode type"
         return selected

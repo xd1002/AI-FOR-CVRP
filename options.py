@@ -14,15 +14,15 @@ def get_options(args=None):
     parser.add_argument('--graph_size', type=int, default=20, help="The size of the problem graph")
     parser.add_argument('--batch_size', type=int, default=128, help='Number of instances per batch during training')
     parser.add_argument('--epoch_size', type=int, default=1280, help='Number of instances per epoch during training')
-    parser.add_argument('--val_size', type=int, default=10000,
+    parser.add_argument('--val_size', type=int, default=1,
                         help='Number of instances used for reporting validation performance')
 
     # Model
     parser.add_argument('--gpu_idx', default='cuda_0', help="Specify gpu used to train the model")
-    parser.add_argument('--model', default='attention', help="Model, 'attention' (default) or 'pointer'")
+    parser.add_argument('--model', default='attention_beam', help="Model, 'attention' (default) or 'pointer'")
     parser.add_argument('--embedding_dim', type=int, default=128, help='Dimension of input embedding')
     parser.add_argument('--hidden_dim', type=int, default=128, help='Dimension of hidden layers in Enc/Dec')
-    parser.add_argument('--n_encode_layers', type=int, default=3,
+    parser.add_argument('--n_encode_layers', type=int, default=1,
                         help='Number of layers in the encoder/critic network')
     parser.add_argument('--n_heads', type=int, default=8,
                         help='number of heads in MHA')
@@ -45,7 +45,7 @@ def get_options(args=None):
     parser.add_argument('--lr_decay', type=float, default=1, help='Learning rate decay per epoch')
 
     parser.add_argument('--n_epochs', type=int, default=50, help='The number of epochs to train')
-    parser.add_argument('--seed', type=int, default=1234, help='Random seed to use')
+    parser.add_argument('--seed', type=int, default=3, help='Random seed to use')
     parser.add_argument('--max_grad_norm', type=float, default=1.0,
                         help='Maximum L2 norm for gradient clipping, default 1.0 (0 to disable clipping)')
     parser.add_argument('--no_cuda', action='store_true', help='Disable CUDA')
@@ -97,10 +97,14 @@ def get_options(args=None):
     # train_only
     parser.add_argument('--test_only', action='store_false', help='whether to test the pretrained model')
     parser.add_argument('--eval_only', type=bool, default=False, help='Set this value to only evaluate model')
-    parser.add_argument('--eval_batch_size', type=int, default=1024,
+    parser.add_argument('--eval_batch_size', type=int, default=1,
                         help="Batch size to use during (baseline) evaluation")
-    parser.add_argument('--load_path', default=None, help='Path to load model parameters and optimizer state from')
+    parser.add_argument('--load_path', default="E:\\xd\\project\\use_drl_to_solve_vrp\\AI-FOR-CVRP\\tests\\cvrp_20\\run_20231022T212333\\epoch-49.pt"
+                        , help='Path to load model parameters and optimizer state from')
     parser.add_argument('--val_dataset', type=str, default=None, help='Dataset file to use for validation')
+
+    # test
+    parser.add_argument('--beam_size', type=int, default=3, help='beam size in beam search')
 
     opts = parser.parse_args(args)
 
